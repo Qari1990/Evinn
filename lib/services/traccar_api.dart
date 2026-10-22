@@ -4,33 +4,68 @@ import '../models/traccar.dart';
 
 /// Thin client for the Traccar REST API.
 ///
-/// Uses HTTP Basic auth (email:password base64) on every request, which Traccar
-/// accepts on /api/* — this avoids cookie/session juggling on mobile. A later
-/// version can switch to a session token + the /api/socket WebSocket for push.
+/// Auth model (matches how the Elfa web app logs in):
+///   POST /api/session with form-encoded `email` + `password` -> 200 + user JSON
+///   and a session cookie (JSESSIONID). We keep that cookie and send it on every
+///   later request. (A plain GET /api/session with no session returns 404, which
+///   is why the first build failed to log in.)
 class TraccarApi {
   final String baseUrl; // e.g. https://webapp.elfaelectric.com
   final String username;
   final String password;
+  String? _cookie;
 
   TraccarApi({required String baseUrl, required this.username, required this.password})
-      : baseUrl = baseUrl.replaceAll(RegExp(r'/+$'), '');
+      : baseUrl = _normalize(baseUrl);
+
+  static String _normalize(String url) {
+    var u = url.trim();
+    if (!u.startsWith('http://') && !u.startsWith('https://')) u = 'https://$u';
+    return u.replaceAll(RegExp(r'/+$'), '');
+  }
 
   Map<String, String> get _headers => {
-        'Authorization': 'Basic ${base64Encode(utf8.encode('$username:$password'))}',
         'Accept': 'application/json',
+        if (_cookie != null) 'Cookie': _cookie!,
       };
 
   Uri _u(String path, [Map<String, dynamic>? q]) =>
       Uri.parse('$baseUrl$path').replace(queryParameters: q?.map((k, v) => MapEntry(k, '$v')));
 
-  /// Validates the credentials. Returns the user's display name on success.
+  void _storeCookie(http.Response r) {
+    final sc = r.headers['set-cookie'];
+    if (sc != null && sc.isNotEmpty) {
+      // Keep just the "NAME=VALUE" part of the first cookie (e.g. JSESSIONID=...).
+      _cookie = sc.split(';').first.trim();
+    }
+  }
+
+  /// Logs in and returns the user's display name. Throws a friendly message.
   Future<String> login() async {
-    final r = await http.get(_u('/api/session'), headers: _headers).timeout(const Duration(seconds: 20));
+    http.Response r;
+    try {
+      r = await http.post(
+        _u('/api/session'),
+        headers: {'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded'},
+        body: {'email': username, 'password': password},
+      ).timeout(const Duration(seconds: 20));
+    } catch (e) {
+      throw Exception('Cannot reach the server. Check the address and your internet.');
+    }
+
     if (r.statusCode == 200) {
-      final j = jsonDecode(r.body) as Map<String, dynamic>;
-      return (j['name'] ?? username).toString();
+      _storeCookie(r);
+      try {
+        final j = jsonDecode(r.body) as Map<String, dynamic>;
+        return (j['name'] ?? username).toString();
+      } catch (_) {
+        return username;
+      }
     }
     if (r.statusCode == 401) throw Exception('Wrong username or password');
+    if (r.statusCode == 404) {
+      throw Exception('Login endpoint not found — check the server address (should be like https://webapp.elfaelectric.com).');
+    }
     throw Exception('Login failed (${r.statusCode})');
   }
 
@@ -54,7 +89,7 @@ class TraccarApi {
         'from': from.toUtc().toIso8601String(),
         'to': to.toUtc().toIso8601String(),
       }),
-      headers: {..._headers, 'Accept': 'application/json'},
+      headers: _headers,
     ).timeout(const Duration(seconds: 30));
     if (r.statusCode != 200) throw Exception('Could not load trips (${r.statusCode})');
     return (jsonDecode(r.body) as List).cast<Map<String, dynamic>>();
