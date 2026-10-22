@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../app_config.dart';
 import '../state/app_state.dart';
+import '../services/update_service.dart';
 
 class SettingsTab extends StatelessWidget {
   const SettingsTab({super.key});
@@ -40,6 +41,19 @@ class SettingsTab extends StatelessWidget {
                 onTap: () => state.selectDevice(d.id),
               ),
           ]),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: ListTile(
+            leading: Icon(Icons.system_update, color: cs.primary),
+            title: const Text('Check for updates'),
+            onTap: () async {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Checking for updates…'), duration: Duration(seconds: 2)),
+              );
+              await UpdateService.checkAndPrompt(context, silent: false);
+            },
+          ),
         ),
         const SizedBox(height: 8),
         Card(

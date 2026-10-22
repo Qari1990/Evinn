@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
+import '../services/update_service.dart';
 import 'dashboard_tab.dart';
 import 'battery_tab.dart';
 import 'trips_tab.dart';
@@ -15,6 +16,15 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Check for a newer build once on launch (best-effort, non-blocking).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) UpdateService.checkAndPrompt(context);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

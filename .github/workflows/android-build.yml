@@ -5,6 +5,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: write   # needed to publish Releases
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -28,12 +31,27 @@ jobs:
       - name: Get packages
         run: flutter pub get
 
-      - name: Build debug APK (installable for testing)
-        run: flutter build apk --debug
+      # versionCode = the CI run number, so in-app auto-update can compare builds.
+      - name: Build debug APK
+        run: flutter build apk --debug --build-name=0.1.0 --build-number=${{ github.run_number }}
 
-      - name: Upload APK
+      - name: Rename APK
+        run: cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/evinn-build-${{ github.run_number }}.apk
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: evinn-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          path: build/app/outputs/flutter-apk/evinn-build-${{ github.run_number }}.apk
           if-no-files-found: error
+
+      # Publish a Release with a clean, no-login, tappable download URL,
+      # tagged build-<run> so the app's updater can detect newer builds.
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: EVINN build ${{ github.run_number }}
+          body: ${{ github.event.head_commit.message }}
+          make_latest: true
+          files: build/app/outputs/flutter-apk/evinn-build-${{ github.run_number }}.apk

@@ -35,4 +35,9 @@ class AppConfig {
 
   /// How often to poll the Traccar server for live position (seconds).
   static const int livePollSeconds = 12;
+
+  /// GitHub repo that publishes release builds, used for in-app auto-update.
+  /// Release tags are "build-<number>"; the APK is attached as a release asset.
+  static const String githubOwner = 'Qari1990';
+  static const String githubRepo = 'Evinn';
 }
