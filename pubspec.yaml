@@ -1,0 +1,26 @@
+name: evinn
+description: Modern EV-bike companion app — live GPS tracking (Traccar) + deep battery data (BMS over Bluetooth).
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.1
+  provider: ^6.1.2
+  shared_preferences: ^2.2.3
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.1
+  fl_chart: ^0.68.0
+  intl: ^0.19.0
+  flutter_blue_plus: ^1.32.12
+  permission_handler: ^11.3.1
+
+dev_dependencies:
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

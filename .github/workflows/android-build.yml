@@ -1,0 +1,39 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # Generate the Android platform folder (does not touch lib/ or pubspec).
+      - name: Create Android project files
+        run: flutter create --platforms=android --project-name evinn --org com.evinn .
+
+      - name: Patch Android permissions & SDK
+        run: |
+          chmod +x scripts/patch_android.sh
+          ./scripts/patch_android.sh
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build debug APK (installable for testing)
+        run: flutter build apk --debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: evinn-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
