@@ -42,15 +42,16 @@ class TraccarApi {
 
   /// Logs in and returns the user's display name. Throws a friendly message.
   Future<String> login() async {
+    final uri = _u('/api/session');
     http.Response r;
     try {
       r = await http.post(
-        _u('/api/session'),
+        uri,
         headers: {'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded'},
         body: {'email': username, 'password': password},
       ).timeout(const Duration(seconds: 20));
     } catch (e) {
-      throw Exception('Cannot reach the server. Check the address and your internet.');
+      throw Exception('Cannot reach the server.\nTried: POST $uri\n($e)');
     }
 
     if (r.statusCode == 200) {
@@ -63,10 +64,8 @@ class TraccarApi {
       }
     }
     if (r.statusCode == 401) throw Exception('Wrong username or password');
-    if (r.statusCode == 404) {
-      throw Exception('Login endpoint not found — check the server address (should be like https://webapp.elfaelectric.com).');
-    }
-    throw Exception('Login failed (${r.statusCode})');
+    // Include the exact request for easy diagnosis if the endpoint is unusual.
+    throw Exception('Login failed (${r.statusCode}).\nTried: POST $uri');
   }
 
   Future<List<TraccarDevice>> devices() async {
