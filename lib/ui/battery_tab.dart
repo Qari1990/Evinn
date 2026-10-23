@@ -66,7 +66,9 @@ class _BatteryTabState extends State<BatteryTab> {
             child: Text(_error!, style: TextStyle(color: cs.error)),
           ),
         // BLE debug log — shows exactly which step runs/fails, with a copy button.
-        if (_log.isNotEmpty && !connected)
+        // Stays visible even when connected (so a "connected but no data" case
+        // can still be copied).
+        if (_log.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 10),
             child: Container(

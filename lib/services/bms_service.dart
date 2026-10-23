@@ -4,6 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../app_config.dart';
 import '../models/bms.dart';
 import 'jbd_protocol.dart';
+import 'daly_protocol.dart';
 
 enum BmsStatus { idle, scanning, connecting, connected, error }
 
@@ -36,6 +37,7 @@ class BmsService {
   }
 
   final _jbd = JbdProtocol();
+  final _daly = DalyProtocol();
   BmsData _snapshot = BmsData();
   BluetoothDevice? _device;
   BluetoothCharacteristic? _write;
@@ -150,12 +152,17 @@ class BmsService {
       await notify.setNotifyValue(true);
       _d('Notifications enabled on FFF1');
       _jbd.reset();
+      _daly.reset();
       _notifySub = notify.onValueReceived.listen((chunk) {
-        _d('RX ${chunk.length} bytes');
-        final parsed = _jbd.addChunk(chunk);
+        _d('RX ${chunk.length}B: ${_hex(chunk)}');
+        // Route by frame header: JBD frames start 0xDD, Daly frames start 0xA5.
+        // Feed the matching parser (both are tried so we auto-detect which
+        // protocol this board actually speaks).
+        final parsed = _jbd.addChunk(chunk) ?? _daly.addChunk(chunk);
         if (parsed != null) {
           _snapshot = _snapshot.merge(parsed);
           _dataCtrl.add(_snapshot);
+          _d('Parsed a frame → data updated');
         }
       });
 
@@ -171,13 +178,42 @@ class BmsService {
     }
   }
 
+  static String _hex(List<int> b) =>
+      b.map((x) => x.toRadixString(16).padLeft(2, '0')).join(' ');
+
+  Future<void> _send(BluetoothCharacteristic w, List<int> cmd, String label) async {
+    try {
+      final wo = w.properties.writeWithoutResponse && !w.properties.write;
+      await w.write(cmd, withoutResponse: wo);
+      _d('TX $label [${_hex(cmd)}]');
+    } catch (e) {
+      // Try the other write type if the first is rejected.
+      try {
+        await w.write(cmd, withoutResponse: !w.properties.writeWithoutResponse);
+        _d('TX $label (fallback write) [${_hex(cmd)}]');
+      } catch (e2) {
+        _d('TX $label FAILED: $e2');
+      }
+    }
+  }
+
+  /// Poll both protocols — the board speaks one of them; whichever answers wins.
   Future<void> _poll() async {
     final w = _write;
     if (w == null) return;
-    final withoutResp = w.properties.writeWithoutResponse;
-    await w.write(JbdProtocol.readBasicInfo(), withoutResponse: withoutResp);
-    await Future.delayed(const Duration(milliseconds: 500));
-    await w.write(JbdProtocol.readCellVolts(), withoutResponse: withoutResp);
+    // JBD / Xiaoxiang
+    await _send(w, JbdProtocol.readBasicInfo(), 'JBD basic');
+    await Future.delayed(const Duration(milliseconds: 350));
+    await _send(w, JbdProtocol.readCellVolts(), 'JBD cells');
+    await Future.delayed(const Duration(milliseconds: 350));
+    // Classic Daly
+    await _send(w, DalyProtocol.soc(), 'Daly 0x90');
+    await Future.delayed(const Duration(milliseconds: 350));
+    await _send(w, DalyProtocol.mos(), 'Daly 0x93');
+    await Future.delayed(const Duration(milliseconds: 350));
+    await _send(w, DalyProtocol.cells(), 'Daly 0x95');
+    await Future.delayed(const Duration(milliseconds: 350));
+    await _send(w, DalyProtocol.temps(), 'Daly 0x96');
   }
 
   Future<void> disconnect() async {
