@@ -81,42 +81,57 @@ class TraccarApi {
     debugLog += '$attempt -> ${r.statusCode}\n  $snippet\n';
   }
 
-  /// Logs in and returns the user's display name. Throws a message that
-  /// includes [debugLog] so failures are self-explanatory.
+  /// Logs in and returns the user's display name. Tries several request
+  /// encodings because the server rejected a plain form POST with an SQL
+  /// "parameter 1 null" error (the email field wasn't landing). The first one
+  /// that returns 200 wins; every attempt is recorded in [debugLog].
   Future<String> login() async {
     debugLog = 'Server: $baseUrl\nUser: $username\n\n';
     final uri = _u('/api/session');
+    final formHeaders = {
+      ..._browser,
+      'Accept': 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+    final rawForm =
+        'email=${Uri.encodeQueryComponent(username)}&password=${Uri.encodeQueryComponent(password)}';
 
-    // 1) Form POST with browser headers.
-    try {
-      final r = await http.post(
-        uri,
-        headers: {..._browser, 'Accept': 'application/json'},
-        body: {'email': username, 'password': password},
-      ).timeout(const Duration(seconds: 20));
-      _log('POST /api/session (form)', r);
-      if (r.statusCode == 200) return _nameFrom(r);
-      if (r.statusCode == 401) throw Exception('Wrong username or password\n\n$debugLog');
-    } on Exception catch (e) {
-      if (e.toString().contains('Wrong username')) rethrow;
-      debugLog += 'POST /api/session (form) -> error: $e\n';
+    // Each attempt: (label, function returning the Response).
+    final attempts = <(String, Future<http.Response> Function())>[
+      // A: form POST, Map body (http sets the urlencoded content-type).
+      ('A POST form (map)', () => http.post(uri,
+          headers: {..._browser, 'Accept': 'application/json'},
+          body: {'email': username, 'password': password})),
+      // B: form POST, explicit raw urlencoded string body.
+      ('B POST form (raw string)', () => http.post(uri, headers: formHeaders, body: rawForm)),
+      // C: form fields in the query string, empty body.
+      ('C POST query string', () => http.post(
+          _u('/api/session', {'email': username, 'password': password}),
+          headers: formHeaders)),
+      // D: JSON body.
+      ('D POST json', () => http.post(uri,
+          headers: {..._browser, 'Accept': 'application/json', 'Content-Type': 'application/json'},
+          body: jsonEncode({'email': username, 'password': password}))),
+    ];
+
+    for (final (label, run) in attempts) {
+      try {
+        final r = await run().timeout(const Duration(seconds: 20));
+        _log(label, r);
+        if (r.statusCode == 200) {
+          debugLog += '\n✓ worked: $label\n';
+          return _nameFrom(r);
+        }
+        if (r.statusCode == 401) {
+          throw Exception('Wrong username or password ($label)\n\n$debugLog');
+        }
+      } on Exception catch (e) {
+        if (e.toString().contains('Wrong username')) rethrow;
+        debugLog += '$label -> error: $e\n';
+      }
     }
 
-    // 2) Basic-auth GET with browser headers.
-    try {
-      final r = await http.get(
-        uri,
-        headers: {..._browser, 'Accept': 'application/json', 'Authorization': _basicAuth},
-      ).timeout(const Duration(seconds: 20));
-      _log('GET /api/session (Basic auth)', r);
-      if (r.statusCode == 200) return _nameFrom(r);
-      if (r.statusCode == 401) throw Exception('Wrong username or password\n\n$debugLog');
-    } on Exception catch (e) {
-      if (e.toString().contains('Wrong username')) rethrow;
-      debugLog += 'GET /api/session (Basic auth) -> error: $e\n';
-    }
-
-    throw Exception('Login failed — server rejected both methods.\n\n$debugLog');
+    throw Exception('Login failed — none of the request formats worked.\n\n$debugLog');
   }
 
   Future<List<TraccarDevice>> devices() async {
