@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../app_config.dart';
 import '../models/bms.dart';
 import 'jbd_protocol.dart';
 
@@ -56,25 +57,38 @@ class BmsService {
       }
 
       _statusCtrl.add(BmsStatus.scanning);
+      final wantMac = (remoteId ?? AppConfig.bmsMac).trim().toUpperCase();
+      final wantName = AppConfig.bmsName.trim().toLowerCase();
       final completer = Completer<BluetoothDevice>();
       await _scanSub?.cancel();
       _scanSub = FlutterBluePlus.scanResults.listen((results) {
         for (final r in results) {
-          final matchId = remoteId != null && r.device.remoteId.str.toUpperCase() == remoteId.toUpperCase();
-          final matchSvc = r.advertisementData.serviceUuids.map((g) => g.str.toLowerCase()).contains(serviceFff0.str.toLowerCase());
-          if (matchId || matchSvc) {
+          final id = r.device.remoteId.str.toUpperCase();
+          final name = (r.device.platformName.isNotEmpty
+                  ? r.device.platformName
+                  : r.advertisementData.advName)
+              .toLowerCase();
+          final matchId = wantMac.isNotEmpty && id == wantMac;
+          final matchName = wantName.isNotEmpty && name == wantName;
+          // Fallback: some boards DO advertise the FFF0 service.
+          final matchSvc = r.advertisementData.serviceUuids
+              .map((g) => g.str.toLowerCase())
+              .contains(serviceFff0.str.toLowerCase());
+          if (matchId || matchName || matchSvc) {
             if (!completer.isCompleted) completer.complete(r.device);
           }
         }
       });
-      await FlutterBluePlus.startScan(
-        withServices: [serviceFff0],
-        timeout: const Duration(seconds: 15),
-      );
+      // Scan everything (no service filter): JBD/Daly boards usually don't
+      // advertise FFF0, so a service-filtered scan would never see them.
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
       final device = await completer.future.timeout(
         const Duration(seconds: 16),
-        onTimeout: () => throw Exception('BMS not found — is the bike in range and the Daly app closed?'),
+        onTimeout: () => throw Exception(
+            'BMS not found. Check: Bluetooth on, phone next to the bike, and the '
+            'Daly/BMS app fully closed (it holds the connection). Looking for '
+            '"${AppConfig.bmsName}" / ${AppConfig.bmsMac}.'),
       );
       await FlutterBluePlus.stopScan();
       await _scanSub?.cancel();

@@ -36,6 +36,14 @@ class AppConfig {
   /// How often to poll the Traccar server for live position (seconds).
   static const int livePollSeconds = 12;
 
+  /// Known BMS identity, used to find the board in a BLE scan. Most JBD/Daly
+  /// boards do NOT advertise their FFF0 service UUID, so filtering the scan by
+  /// service finds nothing — we scan everything and match on name / MAC
+  /// instead. Leave blank for a generic build (then we match the FFF0 service
+  /// after connecting, or let the user pick from the scan list).
+  static const String bmsName = 'LH10C01100';
+  static const String bmsMac = 'D2:1A:04:01:4E:BF'; // Android remoteId; iOS uses an opaque UUID
+
   /// GitHub repo that publishes release builds, used for in-app auto-update.
   /// Release tags are "build-<number>"; the APK is attached as a release asset.
   static const String githubOwner = 'Qari1990';
