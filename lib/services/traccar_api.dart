@@ -4,20 +4,25 @@ import '../models/traccar.dart';
 
 /// Thin client for the Traccar REST API.
 ///
-/// Auth model (matches how the Elfa web app logs in). Traccar accepts two auth
-/// styles, so we try both for robustness:
-///   1. POST /api/session with form-encoded `email` + `password` -> 200 + user
-///      JSON and a session cookie (JSESSIONID).
-///   2. GET /api/session with HTTP Basic auth (Authorization header) -> 200 +
-///      user JSON. Traccar honours Basic auth on *every* /api endpoint, so we
-///      also keep the Basic header on all later requests as a fallback to the
-///      cookie. (A plain GET /api/session with no auth returns 404, which is why
-///      the first build failed to log in.)
+/// Auth: Traccar accepts two login styles and we try both, because some
+/// deployments sit behind a reverse proxy / WAF that rejects a plain
+/// non-browser form POST with 400/403:
+///   1. POST /api/session, form-encoded `email` + `password`
+///   2. GET /api/session with HTTP Basic auth
+/// Both are sent with browser-like headers (User-Agent, Origin, Referer,
+/// X-Requested-With) so a WAF treats them like the real web app. On success we
+/// keep the session cookie AND carry Basic auth on every later request, so data
+/// calls work even without a cookie.
+///
+/// Every attempt is appended to [debugLog] (status + a snippet of the response
+/// body) so a single screenshot of a failure shows exactly what the server said.
 class TraccarApi {
   final String baseUrl; // e.g. https://webapp.elfaelectric.com
   final String username;
   final String password;
   String? _cookie;
+  String debugLog = '';
+
   late final String _basicAuth =
       'Basic ${base64Encode(utf8.encode('$username:$password'))}';
 
@@ -30,11 +35,21 @@ class TraccarApi {
     return u.replaceAll(RegExp(r'/+$'), '');
   }
 
+  // Headers that make the request look like the Traccar web app in a browser,
+  // so a reverse proxy / WAF in front of the server doesn't reject it.
+  Map<String, String> get _browser => {
+        'User-Agent':
+            'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        'Origin': baseUrl,
+        'Referer': '$baseUrl/',
+        'X-Requested-With': 'XMLHttpRequest',
+      };
+
   Map<String, String> get _headers => {
+        ..._browser,
         'Accept': 'application/json',
-        // Basic auth works on every Traccar endpoint; keep it alongside the
-        // cookie so data calls succeed even if the cookie wasn't captured.
-        'Authorization': _basicAuth,
+        'Authorization': _basicAuth, // works on every Traccar endpoint
         if (_cookie != null) 'Cookie': _cookie!,
       };
 
@@ -44,7 +59,6 @@ class TraccarApi {
   void _storeCookie(http.Response r) {
     final sc = r.headers['set-cookie'];
     if (sc != null && sc.isNotEmpty) {
-      // Keep just the "NAME=VALUE" part of the first cookie (e.g. JSESSIONID=...).
       _cookie = sc.split(';').first.trim();
     }
   }
@@ -59,45 +73,50 @@ class TraccarApi {
     }
   }
 
-  /// Logs in and returns the user's display name. Throws a friendly message.
-  ///
-  /// Strategy: try the form POST first; if the server rejects it (some Traccar
-  /// deployments / reverse proxies return 400/404 to the form POST), fall back
-  /// to GET /api/session with Basic auth. 401 from either = bad credentials.
-  Future<String> login() async {
-    final uri = _u('/api/session');
-    final attempts = <String>[];
+  void _log(String attempt, http.Response r) {
+    final body = r.body.trim();
+    final snippet = body.isEmpty
+        ? '(empty body)'
+        : (body.length > 300 ? '${body.substring(0, 300)}…' : body);
+    debugLog += '$attempt -> ${r.statusCode}\n  $snippet\n';
+  }
 
-    // 1) Form POST.
+  /// Logs in and returns the user's display name. Throws a message that
+  /// includes [debugLog] so failures are self-explanatory.
+  Future<String> login() async {
+    debugLog = 'Server: $baseUrl\nUser: $username\n\n';
+    final uri = _u('/api/session');
+
+    // 1) Form POST with browser headers.
     try {
       final r = await http.post(
         uri,
-        headers: {'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded'},
+        headers: {..._browser, 'Accept': 'application/json'},
         body: {'email': username, 'password': password},
       ).timeout(const Duration(seconds: 20));
+      _log('POST /api/session (form)', r);
       if (r.statusCode == 200) return _nameFrom(r);
-      if (r.statusCode == 401) throw Exception('Wrong username or password');
-      attempts.add('POST $uri -> ${r.statusCode}');
+      if (r.statusCode == 401) throw Exception('Wrong username or password\n\n$debugLog');
     } on Exception catch (e) {
       if (e.toString().contains('Wrong username')) rethrow;
-      attempts.add('POST $uri -> error');
+      debugLog += 'POST /api/session (form) -> error: $e\n';
     }
 
-    // 2) Basic-auth GET fallback.
+    // 2) Basic-auth GET with browser headers.
     try {
       final r = await http.get(
         uri,
-        headers: {'Accept': 'application/json', 'Authorization': _basicAuth},
+        headers: {..._browser, 'Accept': 'application/json', 'Authorization': _basicAuth},
       ).timeout(const Duration(seconds: 20));
+      _log('GET /api/session (Basic auth)', r);
       if (r.statusCode == 200) return _nameFrom(r);
-      if (r.statusCode == 401) throw Exception('Wrong username or password');
-      attempts.add('GET(Basic) $uri -> ${r.statusCode}');
+      if (r.statusCode == 401) throw Exception('Wrong username or password\n\n$debugLog');
     } on Exception catch (e) {
       if (e.toString().contains('Wrong username')) rethrow;
-      attempts.add('GET(Basic) $uri -> error');
+      debugLog += 'GET /api/session (Basic auth) -> error: $e\n';
     }
 
-    throw Exception('Login failed.\n${attempts.join('\n')}');
+    throw Exception('Login failed — server rejected both methods.\n\n$debugLog');
   }
 
   Future<List<TraccarDevice>> devices() async {

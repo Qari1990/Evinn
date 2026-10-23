@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../app_config.dart';
 import '../state/app_state.dart';
@@ -77,7 +78,37 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   if (state.error != null) ...[
                     const SizedBox(height: 14),
-                    Text(state.error!, style: TextStyle(color: cs.error)),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: cs.errorContainer.withOpacity(0.25),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SelectableText(state.error!,
+                              style: TextStyle(color: cs.error, fontSize: 12.5)),
+                          const SizedBox(height: 6),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              icon: const Icon(Icons.copy, size: 16),
+                              label: const Text('Copy details'),
+                              onPressed: () async {
+                                await Clipboard.setData(ClipboardData(text: state.error!));
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Copied — paste it in the chat')),
+                                  );
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                   const SizedBox(height: 22),
                   FilledButton(
