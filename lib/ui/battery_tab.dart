@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../app_config.dart';
 import '../models/bms.dart';
 import '../services/bms_service.dart';
@@ -17,6 +18,7 @@ class _BatteryTabState extends State<BatteryTab> {
   BmsStatus _status = BmsStatus.idle;
   BmsData? _data;
   String? _error;
+  String _log = '';
 
   @override
   void initState() {
@@ -24,6 +26,7 @@ class _BatteryTabState extends State<BatteryTab> {
     _bms.status.listen((s) => setState(() => _status = s));
     _bms.data.listen((d) => setState(() => _data = d));
     _bms.errors.listen((e) => setState(() => _error = e));
+    _bms.log.listen((l) => setState(() => _log = l));
   }
 
   @override
@@ -61,6 +64,41 @@ class _BatteryTabState extends State<BatteryTab> {
           Padding(
             padding: const EdgeInsets.only(top: 10),
             child: Text(_error!, style: TextStyle(color: cs.error)),
+          ),
+        // BLE debug log — shows exactly which step runs/fails, with a copy button.
+        if (_log.isNotEmpty && !connected)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Text('Bluetooth log', style: TextStyle(fontWeight: FontWeight.w600, color: cs.onSurfaceVariant)),
+                    const Spacer(),
+                    TextButton.icon(
+                      icon: const Icon(Icons.copy, size: 16),
+                      label: const Text('Copy'),
+                      onPressed: () async {
+                        await Clipboard.setData(ClipboardData(text: _log));
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Copied — paste it in the chat')),
+                          );
+                        }
+                      },
+                    ),
+                  ]),
+                  SelectableText(_log, style: const TextStyle(fontSize: 12, height: 1.35)),
+                ],
+              ),
+            ),
           ),
         if (_data != null) ..._battery(context, _data!),
         if (_data == null && !busy)

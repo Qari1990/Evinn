@@ -17,10 +17,23 @@ class BmsService {
   final _statusCtrl = StreamController<BmsStatus>.broadcast();
   final _dataCtrl = StreamController<BmsData>.broadcast();
   final _errorCtrl = StreamController<String>.broadcast();
+  final _logCtrl = StreamController<String>.broadcast();
 
   Stream<BmsStatus> get status => _statusCtrl.stream;
   Stream<BmsData> get data => _dataCtrl.stream;
   Stream<String> get errors => _errorCtrl.stream;
+  Stream<String> get log => _logCtrl.stream;
+
+  /// Human-readable trace of the last connect attempt (for the on-screen
+  /// "Copy details" button, same idea as the login debug log).
+  String debugLog = '';
+  StreamSubscription? _connSub;
+
+  void _d(String line) {
+    final t = DateTime.now().toIso8601String().substring(11, 19);
+    debugLog += '[$t] $line\n';
+    _logCtrl.add(debugLog);
+  }
 
   final _jbd = JbdProtocol();
   BmsData _snapshot = BmsData();
@@ -44,17 +57,23 @@ class BmsService {
   /// Scans for the bike's BMS (filtered by the FFF0 service) and connects to the
   /// first match. Optionally match a known [remoteId] (MAC) for a saved bike.
   Future<void> connect({String? remoteId}) async {
+    debugLog = '';
     try {
+      _d('Requesting permissions…');
       if (!await _ensurePermissions()) {
-        _errorCtrl.add('Bluetooth/Location permission denied');
+        _d('Permissions denied');
+        _errorCtrl.add('Bluetooth/Location permission denied — allow Nearby devices & Location in app settings.');
         _statusCtrl.add(BmsStatus.error);
         return;
       }
+      _d('Permissions OK');
       if (await FlutterBluePlus.adapterState.first != BluetoothAdapterState.on) {
+        _d('Adapter is OFF');
         _errorCtrl.add('Please turn on Bluetooth');
         _statusCtrl.add(BmsStatus.error);
         return;
       }
+      _d('Bluetooth adapter ON');
 
       _statusCtrl.add(BmsStatus.scanning);
       final wantMac = (remoteId ?? AppConfig.bmsMac).trim().toUpperCase();
@@ -75,12 +94,15 @@ class BmsService {
               .map((g) => g.str.toLowerCase())
               .contains(serviceFff0.str.toLowerCase());
           if (matchId || matchName || matchSvc) {
+            final how = matchId ? 'MAC' : (matchName ? 'name' : 'FFF0 adv');
+            _d('Found "${name.isEmpty ? '(no name)' : name}" $id (by $how)');
             if (!completer.isCompleted) completer.complete(r.device);
           }
         }
       });
       // Scan everything (no service filter): JBD/Daly boards usually don't
       // advertise FFF0, so a service-filtered scan would never see them.
+      _d('Scanning (looking for "${AppConfig.bmsName}" / ${AppConfig.bmsMac})…');
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
       final device = await completer.future.timeout(
@@ -95,19 +117,41 @@ class BmsService {
 
       _statusCtrl.add(BmsStatus.connecting);
       _device = device;
-      await device.connect(timeout: const Duration(seconds: 15));
 
+      // Watch the live connection state so a drop (e.g. Android GATT 133, or the
+      // Daly app grabbing the link) shows up in the log instead of a silent fail.
+      await _connSub?.cancel();
+      _connSub = device.connectionState.listen((s) => _d('Connection state: $s'));
+
+      // Connect with one retry — Android often throws status 133 on the first try.
+      _d('Connecting to ${device.remoteId.str}…');
+      try {
+        await device.connect(timeout: const Duration(seconds: 20), autoConnect: false);
+      } catch (e) {
+        _d('First connect failed ($e) — retrying once…');
+        await Future.delayed(const Duration(seconds: 2));
+        await device.connect(timeout: const Duration(seconds: 20), autoConnect: false);
+      }
+      _d('Connected. Discovering services…');
+
+      await Future.delayed(const Duration(milliseconds: 400)); // let the stack settle
       final services = await device.discoverServices();
+      _d('Discovered ${services.length} services: ${services.map((s) => s.uuid.str.split('-').first).join(', ')}');
       final svc = services.firstWhere(
-        (s) => s.uuid.str.toLowerCase().endsWith('fff0'),
-        orElse: () => throw Exception('BMS service FFF0 not found'),
+        (s) => s.uuid.str.toLowerCase().contains('fff0'),
+        orElse: () => throw Exception('BMS service FFF0 not found in ${services.length} services'),
       );
-      final notify = svc.characteristics.firstWhere((c) => c.uuid.str.toLowerCase().endsWith('fff1'));
-      _write = svc.characteristics.firstWhere((c) => c.uuid.str.toLowerCase().endsWith('fff2'));
+      final notify = svc.characteristics.firstWhere((c) => c.uuid.str.toLowerCase().contains('fff1'),
+          orElse: () => throw Exception('Notify char FFF1 not found'));
+      _write = svc.characteristics.firstWhere((c) => c.uuid.str.toLowerCase().contains('fff2'),
+          orElse: () => throw Exception('Write char FFF2 not found'));
+      _d('FFF0/FFF1/FFF2 found (write props: wResp=${_write!.properties.write}, woResp=${_write!.properties.writeWithoutResponse})');
 
       await notify.setNotifyValue(true);
+      _d('Notifications enabled on FFF1');
       _jbd.reset();
       _notifySub = notify.onValueReceived.listen((chunk) {
+        _d('RX ${chunk.length} bytes');
         final parsed = _jbd.addChunk(chunk);
         if (parsed != null) {
           _snapshot = _snapshot.merge(parsed);
@@ -116,9 +160,11 @@ class BmsService {
       });
 
       _statusCtrl.add(BmsStatus.connected);
+      _d('Connected — requesting battery data');
       await _poll();
       _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) => _poll());
     } catch (e) {
+      _d('ERROR: $e');
       _errorCtrl.add(e.toString());
       _statusCtrl.add(BmsStatus.error);
       await disconnect();
@@ -138,6 +184,7 @@ class BmsService {
     _pollTimer?.cancel();
     await _notifySub?.cancel();
     await _scanSub?.cancel();
+    await _connSub?.cancel();
     try {
       await FlutterBluePlus.stopScan();
     } catch (_) {}
@@ -154,5 +201,6 @@ class BmsService {
     _statusCtrl.close();
     _dataCtrl.close();
     _errorCtrl.close();
+    _logCtrl.close();
   }
 }
