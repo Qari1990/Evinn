@@ -96,8 +96,25 @@ class TraccarApi {
     final rawForm =
         'email=${Uri.encodeQueryComponent(username)}&password=${Uri.encodeQueryComponent(password)}';
 
+    // Elfa customised their session endpoint (the server trace shows an
+    // OverrideFilter and an SQL "parameter 1 null"), so it likely reads a
+    // different identifier field than `email`. Send every likely field name at
+    // once — the server picks whichever one it declares and ignores the rest.
+    final multiId = {
+      'email': username,
+      'username': username,
+      'phone': username,
+      'mobile': username,
+      'login': username,
+      'password': password,
+    };
+
     // Each attempt: (label, function returning the Response).
     final attempts = <(String, Future<http.Response> Function())>[
+      // E: form POST with all likely identifier field names (most likely fix).
+      ('E POST form (all id fields)', () => http.post(uri,
+          headers: {..._browser, 'Accept': 'application/json'},
+          body: multiId)),
       // A: form POST, Map body (http sets the urlencoded content-type).
       ('A POST form (map)', () => http.post(uri,
           headers: {..._browser, 'Accept': 'application/json'},
