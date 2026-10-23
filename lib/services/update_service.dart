@@ -29,11 +29,19 @@ class UpdateService {
       final tag = (j['tag_name'] ?? '').toString(); // e.g. build-7
       final latest = int.tryParse(tag.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
       final assets = (j['assets'] as List?) ?? [];
-      final apk = assets.cast<Map<String, dynamic>>().firstWhere(
-            (a) => (a['name'] ?? '').toString().toLowerCase().endsWith('.apk'),
-            orElse: () => {},
-          );
-      final apkUrl = (apk['browser_download_url'] ?? '').toString();
+      // Prefer the primary arm64 APK (evinn-build-N.apk) over the -arm32 one.
+      String apkUrl = '';
+      for (final a in assets.cast<Map<String, dynamic>>()) {
+        final name = (a['name'] ?? '').toString().toLowerCase();
+        if (!name.endsWith('.apk')) continue;
+        final url = (a['browser_download_url'] ?? '').toString();
+        if (name.contains('arm32')) {
+          if (apkUrl.isEmpty) apkUrl = url; // fallback only
+        } else {
+          apkUrl = url; // primary
+          break;
+        }
+      }
 
       if (latest <= installed || apkUrl.isEmpty) return; // up to date
       if (!context.mounted) return;

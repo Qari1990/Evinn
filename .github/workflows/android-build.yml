@@ -39,17 +39,26 @@ jobs:
       - name: Get packages
         run: flutter pub get
 
-      # versionCode = CI run number so the in-app updater can compare builds.
+      # Release + split-per-ABI => small APKs (~20MB arm64) that download
+      # reliably on mobile, instead of one ~160MB universal debug APK. The
+      # Flutter template signs release with the (fixed) debug key, so these
+      # share the same signature and still install over / auto-update prior
+      # builds. versionCode = CI run number so the updater can compare builds.
       - name: Build APK
-        run: flutter build apk --debug --build-name=0.1.0 --build-number=${{ github.run_number }}
+        run: flutter build apk --release --split-per-abi --build-name=0.1.0 --build-number=${{ github.run_number }}
 
-      - name: Rename APK
-        run: cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/evinn-build-${{ github.run_number }}.apk
+      # Primary download = arm64-v8a (virtually all phones since ~2016).
+      # Also publish the 32-bit build for very old devices.
+      - name: Rename APKs
+        run: |
+          cd build/app/outputs/flutter-apk
+          cp app-arm64-v8a-release.apk     evinn-build-${{ github.run_number }}.apk
+          cp app-armeabi-v7a-release.apk   evinn-build-${{ github.run_number }}-arm32.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: evinn-debug-apk
+          name: evinn-apk
           path: build/app/outputs/flutter-apk/evinn-build-${{ github.run_number }}.apk
           if-no-files-found: error
 
@@ -62,4 +71,6 @@ jobs:
           name: EVINN build ${{ github.run_number }}
           body: ${{ github.event.head_commit.message }}
           make_latest: true
-          files: build/app/outputs/flutter-apk/evinn-build-${{ github.run_number }}.apk
+          files: |
+            build/app/outputs/flutter-apk/evinn-build-${{ github.run_number }}.apk
+            build/app/outputs/flutter-apk/evinn-build-${{ github.run_number }}-arm32.apk
