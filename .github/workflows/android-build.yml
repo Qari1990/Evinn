@@ -28,11 +28,19 @@ jobs:
           chmod +x scripts/patch_android.sh
           ./scripts/patch_android.sh
 
+      # Use a fixed debug keystore so every build has the SAME signature.
+      # This is what makes installs-over-previous-builds and in-app auto-update
+      # work. These are Android's standard public debug credentials, not secrets.
+      - name: Install fixed signing key
+        run: |
+          mkdir -p ~/.android
+          cp signing/debug.keystore ~/.android/debug.keystore
+
       - name: Get packages
         run: flutter pub get
 
-      # versionCode = the CI run number, so in-app auto-update can compare builds.
-      - name: Build debug APK
+      # versionCode = CI run number so the in-app updater can compare builds.
+      - name: Build APK
         run: flutter build apk --debug --build-name=0.1.0 --build-number=${{ github.run_number }}
 
       - name: Rename APK

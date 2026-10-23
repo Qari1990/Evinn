@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Injects the permissions and SDK settings the app needs into the Android
-# project that `flutter create` generates. Safe to run repeatedly (idempotent).
+# Patches the Android project that `flutter create` generates:
+#  - adds the permissions the app needs
+#  - sets a sane minSdk
+# Signing is handled separately in CI by using a fixed debug keystore
+# (signing/debug.keystore) so every build shares one signature — that lets
+# Android install updates over previous builds and lets in-app auto-update work.
+# Safe to run repeatedly (idempotent).
 set -euo pipefail
 
 MANIFEST="android/app/src/main/AndroidManifest.xml"
-GRADLE_KTS="android/app/build.gradle.kts"
-GRADLE="android/app/build.gradle"
 
 # --- Permissions -----------------------------------------------------------
 PERMS='    <uses-permission android:name="android.permission.INTERNET"/>
@@ -28,8 +31,8 @@ else
   echo "Permissions already present."
 fi
 
-# --- minSdk (BLE needs >= 21; flutter_blue_plus/permission_handler happy) ---
-for f in "$GRADLE_KTS" "$GRADLE"; do
+# --- minSdk (BLE needs >= 21) ----------------------------------------------
+for f in android/app/build.gradle.kts android/app/build.gradle; do
   [ -f "$f" ] || continue
   sed -i -E 's/minSdk(Version)?\s*=?\s*(flutter\.minSdkVersion|[0-9]+)/minSdk = 21/' "$f" || true
 done
