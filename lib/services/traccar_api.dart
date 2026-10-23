@@ -4,16 +4,22 @@ import '../models/traccar.dart';
 
 /// Thin client for the Traccar REST API.
 ///
-/// Auth model (matches how the Elfa web app logs in):
-///   POST /api/session with form-encoded `email` + `password` -> 200 + user JSON
-///   and a session cookie (JSESSIONID). We keep that cookie and send it on every
-///   later request. (A plain GET /api/session with no session returns 404, which
-///   is why the first build failed to log in.)
+/// Auth model (matches how the Elfa web app logs in). Traccar accepts two auth
+/// styles, so we try both for robustness:
+///   1. POST /api/session with form-encoded `email` + `password` -> 200 + user
+///      JSON and a session cookie (JSESSIONID).
+///   2. GET /api/session with HTTP Basic auth (Authorization header) -> 200 +
+///      user JSON. Traccar honours Basic auth on *every* /api endpoint, so we
+///      also keep the Basic header on all later requests as a fallback to the
+///      cookie. (A plain GET /api/session with no auth returns 404, which is why
+///      the first build failed to log in.)
 class TraccarApi {
   final String baseUrl; // e.g. https://webapp.elfaelectric.com
   final String username;
   final String password;
   String? _cookie;
+  late final String _basicAuth =
+      'Basic ${base64Encode(utf8.encode('$username:$password'))}';
 
   TraccarApi({required String baseUrl, required this.username, required this.password})
       : baseUrl = _normalize(baseUrl);
@@ -26,6 +32,9 @@ class TraccarApi {
 
   Map<String, String> get _headers => {
         'Accept': 'application/json',
+        // Basic auth works on every Traccar endpoint; keep it alongside the
+        // cookie so data calls succeed even if the cookie wasn't captured.
+        'Authorization': _basicAuth,
         if (_cookie != null) 'Cookie': _cookie!,
       };
 
@@ -40,32 +49,55 @@ class TraccarApi {
     }
   }
 
+  String _nameFrom(http.Response r) {
+    _storeCookie(r);
+    try {
+      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      return (j['name'] ?? username).toString();
+    } catch (_) {
+      return username;
+    }
+  }
+
   /// Logs in and returns the user's display name. Throws a friendly message.
+  ///
+  /// Strategy: try the form POST first; if the server rejects it (some Traccar
+  /// deployments / reverse proxies return 400/404 to the form POST), fall back
+  /// to GET /api/session with Basic auth. 401 from either = bad credentials.
   Future<String> login() async {
     final uri = _u('/api/session');
-    http.Response r;
+    final attempts = <String>[];
+
+    // 1) Form POST.
     try {
-      r = await http.post(
+      final r = await http.post(
         uri,
         headers: {'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded'},
         body: {'email': username, 'password': password},
       ).timeout(const Duration(seconds: 20));
-    } catch (e) {
-      throw Exception('Cannot reach the server.\nTried: POST $uri\n($e)');
+      if (r.statusCode == 200) return _nameFrom(r);
+      if (r.statusCode == 401) throw Exception('Wrong username or password');
+      attempts.add('POST $uri -> ${r.statusCode}');
+    } on Exception catch (e) {
+      if (e.toString().contains('Wrong username')) rethrow;
+      attempts.add('POST $uri -> error');
     }
 
-    if (r.statusCode == 200) {
-      _storeCookie(r);
-      try {
-        final j = jsonDecode(r.body) as Map<String, dynamic>;
-        return (j['name'] ?? username).toString();
-      } catch (_) {
-        return username;
-      }
+    // 2) Basic-auth GET fallback.
+    try {
+      final r = await http.get(
+        uri,
+        headers: {'Accept': 'application/json', 'Authorization': _basicAuth},
+      ).timeout(const Duration(seconds: 20));
+      if (r.statusCode == 200) return _nameFrom(r);
+      if (r.statusCode == 401) throw Exception('Wrong username or password');
+      attempts.add('GET(Basic) $uri -> ${r.statusCode}');
+    } on Exception catch (e) {
+      if (e.toString().contains('Wrong username')) rethrow;
+      attempts.add('GET(Basic) $uri -> error');
     }
-    if (r.statusCode == 401) throw Exception('Wrong username or password');
-    // Include the exact request for easy diagnosis if the endpoint is unusual.
-    throw Exception('Login failed (${r.statusCode}).\nTried: POST $uri');
+
+    throw Exception('Login failed.\n${attempts.join('\n')}');
   }
 
   Future<List<TraccarDevice>> devices() async {
