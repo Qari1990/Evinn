@@ -1,19 +1,19 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../app_config.dart';
 import '../models/bms.dart';
-import 'jbd_protocol.dart';
 import 'daly_protocol.dart';
 
 enum BmsStatus { idle, scanning, connecting, connected, error }
 
-/// Connects to the JBD/Daly BMS over BLE (service FFF0, notify FFF1, write FFF2)
-/// and streams parsed battery snapshots.
+/// Connects to the bike's Daly BMS over BLE (service FFF0, notify FFF1, write
+/// FFF2) and streams parsed battery snapshots. Caches the last reading so it can
+/// be shown (with a timestamp) when disconnected.
 class BmsService {
   static final Guid serviceFff0 = Guid('0000fff0-0000-1000-8000-00805f9b34fb');
-  static final Guid charNotifyFff1 = Guid('0000fff1-0000-1000-8000-00805f9b34fb');
-  static final Guid charWriteFff2 = Guid('0000fff2-0000-1000-8000-00805f9b34fb');
 
   final _statusCtrl = StreamController<BmsStatus>.broadcast();
   final _dataCtrl = StreamController<BmsData>.broadcast();
@@ -25,27 +25,66 @@ class BmsService {
   Stream<String> get errors => _errorCtrl.stream;
   Stream<String> get log => _logCtrl.stream;
 
-  /// Human-readable trace of the last connect attempt (for the on-screen
-  /// "Copy details" button, same idea as the login debug log).
-  String debugLog = '';
-  StreamSubscription? _connSub;
+  // A short rolling log (last N lines) for the collapsible "Bluetooth log".
+  final List<String> _logLines = [];
+  static const int _maxLogLines = 18;
+  String get debugLog => _logLines.join('\n');
+  bool _sawData = false;
 
-  void _d(String line) {
-    final t = DateTime.now().toIso8601String().substring(11, 19);
-    debugLog += '[$t] $line\n';
-    _logCtrl.add(debugLog);
-  }
-
-  final _jbd = JbdProtocol();
   final _daly = DalyProtocol();
   BmsData _snapshot = BmsData();
   BluetoothDevice? _device;
   BluetoothCharacteristic? _write;
   StreamSubscription? _notifySub;
   StreamSubscription? _scanSub;
+  StreamSubscription? _connSub;
   Timer? _pollTimer;
+  DateTime _lastCache = DateTime.fromMillisecondsSinceEpoch(0);
 
   BmsData get snapshot => _snapshot;
+
+  void _d(String line) {
+    final t = DateTime.now().toIso8601String().substring(11, 19);
+    _logLines.add('[$t] $line');
+    while (_logLines.length > _maxLogLines) {
+      _logLines.removeAt(0);
+    }
+    _logCtrl.add(debugLog);
+  }
+
+  // ---- last-reading cache -------------------------------------------------
+
+  static const _kLast = 'bms_last';
+  static const _kLastTs = 'bms_last_ts';
+
+  Future<void> _cache(BmsData d) async {
+    // Throttle writes to ~once every 5s.
+    if (DateTime.now().difference(_lastCache).inSeconds < 5) return;
+    _lastCache = DateTime.now();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kLast, jsonEncode(d.toJson()));
+      await p.setInt(_kLastTs, DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {}
+  }
+
+  /// Load the last cached reading and when it was taken.
+  static Future<(BmsData?, DateTime?)> loadCached() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final s = p.getString(_kLast);
+      final ts = p.getInt(_kLastTs);
+      if (s == null) return (null, null);
+      return (
+        BmsData.fromJson(jsonDecode(s) as Map<String, dynamic>),
+        ts != null ? DateTime.fromMillisecondsSinceEpoch(ts) : null,
+      );
+    } catch (_) {
+      return (null, null);
+    }
+  }
+
+  // ---- connect ------------------------------------------------------------
 
   Future<bool> _ensurePermissions() async {
     final results = await [
@@ -56,10 +95,9 @@ class BmsService {
     return results.values.every((s) => s.isGranted || s.isLimited);
   }
 
-  /// Scans for the bike's BMS (filtered by the FFF0 service) and connects to the
-  /// first match. Optionally match a known [remoteId] (MAC) for a saved bike.
   Future<void> connect({String? remoteId}) async {
-    debugLog = '';
+    _logLines.clear();
+    _sawData = false;
     try {
       _d('Requesting permissions…');
       if (!await _ensurePermissions()) {
@@ -68,14 +106,13 @@ class BmsService {
         _statusCtrl.add(BmsStatus.error);
         return;
       }
-      _d('Permissions OK');
       if (await FlutterBluePlus.adapterState.first != BluetoothAdapterState.on) {
-        _d('Adapter is OFF');
+        _d('Bluetooth is OFF');
         _errorCtrl.add('Please turn on Bluetooth');
         _statusCtrl.add(BmsStatus.error);
         return;
       }
-      _d('Bluetooth adapter ON');
+      _d('Bluetooth ON · scanning…');
 
       _statusCtrl.add(BmsStatus.scanning);
       final wantMac = (remoteId ?? AppConfig.bmsMac).trim().toUpperCase();
@@ -91,129 +128,100 @@ class BmsService {
               .toLowerCase();
           final matchId = wantMac.isNotEmpty && id == wantMac;
           final matchName = wantName.isNotEmpty && name == wantName;
-          // Fallback: some boards DO advertise the FFF0 service.
           final matchSvc = r.advertisementData.serviceUuids
               .map((g) => g.str.toLowerCase())
               .contains(serviceFff0.str.toLowerCase());
           if (matchId || matchName || matchSvc) {
-            final how = matchId ? 'MAC' : (matchName ? 'name' : 'FFF0 adv');
-            _d('Found "${name.isEmpty ? '(no name)' : name}" $id (by $how)');
             if (!completer.isCompleted) completer.complete(r.device);
           }
         }
       });
-      // Scan everything (no service filter): JBD/Daly boards usually don't
-      // advertise FFF0, so a service-filtered scan would never see them.
-      _d('Scanning (looking for "${AppConfig.bmsName}" / ${AppConfig.bmsMac})…');
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
       final device = await completer.future.timeout(
         const Duration(seconds: 16),
         onTimeout: () => throw Exception(
-            'BMS not found. Check: Bluetooth on, phone next to the bike, and the '
-            'Daly/BMS app fully closed (it holds the connection). Looking for '
-            '"${AppConfig.bmsName}" / ${AppConfig.bmsMac}.'),
+            'Battery not found. Check: Bluetooth on, phone next to the bike, and '
+            'the Daly app fully closed (it holds the connection).'),
       );
       await FlutterBluePlus.stopScan();
       await _scanSub?.cancel();
+      _d('Found the battery · connecting…');
 
       _statusCtrl.add(BmsStatus.connecting);
       _device = device;
-
-      // Watch the live connection state so a drop (e.g. Android GATT 133, or the
-      // Daly app grabbing the link) shows up in the log instead of a silent fail.
       await _connSub?.cancel();
-      _connSub = device.connectionState.listen((s) => _d('Connection state: $s'));
+      _connSub = device.connectionState.listen((s) {
+        if (s == BluetoothConnectionState.disconnected && _sawData) {
+          _d('Disconnected');
+        }
+      });
 
-      // Connect with one retry — Android often throws status 133 on the first try.
-      _d('Connecting to ${device.remoteId.str}…');
       try {
         await device.connect(timeout: const Duration(seconds: 20), autoConnect: false);
       } catch (e) {
-        _d('First connect failed ($e) — retrying once…');
         await Future.delayed(const Duration(seconds: 2));
         await device.connect(timeout: const Duration(seconds: 20), autoConnect: false);
       }
-      _d('Connected. Discovering services…');
 
-      await Future.delayed(const Duration(milliseconds: 400)); // let the stack settle
+      await Future.delayed(const Duration(milliseconds: 400));
       final services = await device.discoverServices();
-      _d('Discovered ${services.length} services: ${services.map((s) => s.uuid.str.split('-').first).join(', ')}');
       final svc = services.firstWhere(
         (s) => s.uuid.str.toLowerCase().contains('fff0'),
-        orElse: () => throw Exception('BMS service FFF0 not found in ${services.length} services'),
+        orElse: () => throw Exception('Battery BLE service not found'),
       );
       final notify = svc.characteristics.firstWhere((c) => c.uuid.str.toLowerCase().contains('fff1'),
-          orElse: () => throw Exception('Notify char FFF1 not found'));
+          orElse: () => throw Exception('Notify characteristic not found'));
       _write = svc.characteristics.firstWhere((c) => c.uuid.str.toLowerCase().contains('fff2'),
-          orElse: () => throw Exception('Write char FFF2 not found'));
-      _d('FFF0/FFF1/FFF2 found (write props: wResp=${_write!.properties.write}, woResp=${_write!.properties.writeWithoutResponse})');
+          orElse: () => throw Exception('Write characteristic not found'));
 
       await notify.setNotifyValue(true);
-      _d('Notifications enabled on FFF1');
-      _jbd.reset();
       _daly.reset();
       _notifySub = notify.onValueReceived.listen((chunk) {
-        _d('RX ${chunk.length}B: ${_hex(chunk)}');
-        // Route by frame header: JBD frames start 0xDD, Daly frames start 0xA5.
-        // Feed the matching parser (both are tried so we auto-detect which
-        // protocol this board actually speaks).
-        final parsed = _jbd.addChunk(chunk) ?? _daly.addChunk(chunk);
+        final parsed = _daly.addChunk(chunk);
         if (parsed != null) {
           _snapshot = _snapshot.merge(parsed);
           _dataCtrl.add(_snapshot);
-          _d('Parsed a frame → data updated');
+          _cache(_snapshot);
+          if (!_sawData) {
+            _sawData = true;
+            _d('Receiving live data ✓');
+          }
         }
       });
 
       _statusCtrl.add(BmsStatus.connected);
-      _d('Connected — requesting battery data');
+      _d('Connected');
       await _poll();
-      _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) => _poll());
+      _pollTimer = Timer.periodic(const Duration(seconds: 6), (_) => _poll());
     } catch (e) {
-      _d('ERROR: $e');
-      _errorCtrl.add(e.toString());
+      _d('Error: ${_short(e)}');
+      _errorCtrl.add(e.toString().replaceFirst('Exception: ', ''));
       _statusCtrl.add(BmsStatus.error);
       await disconnect();
     }
   }
 
-  static String _hex(List<int> b) =>
-      b.map((x) => x.toRadixString(16).padLeft(2, '0')).join(' ');
-
-  Future<void> _send(BluetoothCharacteristic w, List<int> cmd, String label) async {
-    try {
-      final wo = w.properties.writeWithoutResponse && !w.properties.write;
-      await w.write(cmd, withoutResponse: wo);
-      _d('TX $label [${_hex(cmd)}]');
-    } catch (e) {
-      // Try the other write type if the first is rejected.
-      try {
-        await w.write(cmd, withoutResponse: !w.properties.writeWithoutResponse);
-        _d('TX $label (fallback write) [${_hex(cmd)}]');
-      } catch (e2) {
-        _d('TX $label FAILED: $e2');
-      }
-    }
+  static String _short(Object e) {
+    final s = e.toString().replaceFirst('Exception: ', '');
+    return s.length > 80 ? '${s.substring(0, 80)}…' : s;
   }
 
-  /// Poll both protocols — the board speaks one of them; whichever answers wins.
+  /// Poll the full Daly command set so every field stays current.
   Future<void> _poll() async {
     final w = _write;
     if (w == null) return;
-    // JBD / Xiaoxiang
-    await _send(w, JbdProtocol.readBasicInfo(), 'JBD basic');
-    await Future.delayed(const Duration(milliseconds: 350));
-    await _send(w, JbdProtocol.readCellVolts(), 'JBD cells');
-    await Future.delayed(const Duration(milliseconds: 350));
-    // Classic Daly
-    await _send(w, DalyProtocol.soc(), 'Daly 0x90');
-    await Future.delayed(const Duration(milliseconds: 350));
-    await _send(w, DalyProtocol.mos(), 'Daly 0x93');
-    await Future.delayed(const Duration(milliseconds: 350));
-    await _send(w, DalyProtocol.cells(), 'Daly 0x95');
-    await Future.delayed(const Duration(milliseconds: 350));
-    await _send(w, DalyProtocol.temps(), 'Daly 0x96');
+    final wo = w.properties.writeWithoutResponse && !w.properties.write;
+    for (final (_, cmd) in DalyProtocol.pollSet) {
+      try {
+        await w.write(cmd, withoutResponse: wo);
+      } catch (_) {
+        try {
+          await w.write(cmd, withoutResponse: !wo);
+        } catch (_) {}
+      }
+      await Future.delayed(const Duration(milliseconds: 220));
+    }
   }
 
   Future<void> disconnect() async {
