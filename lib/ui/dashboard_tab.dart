@@ -2,12 +2,39 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import '../models/bms.dart';
 import '../models/traccar.dart';
+import '../services/bms_service.dart';
+import '../services/range_estimator.dart';
 import '../state/app_state.dart';
 import 'widgets.dart';
 
-class DashboardTab extends StatelessWidget {
+class DashboardTab extends StatefulWidget {
   const DashboardTab({super.key});
+
+  @override
+  State<DashboardTab> createState() => _DashboardTabState();
+}
+
+class _DashboardTabState extends State<DashboardTab> {
+  BmsData? _bms; // last cached battery reading (for SOC + range)
+  DateTime? _bmsTs;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBms();
+  }
+
+  Future<void> _loadBms() async {
+    await RangeEstimator.preload();
+    final (cached, ts) = await BmsService.loadCached();
+    if (!mounted) return;
+    setState(() {
+      _bms = cached;
+      _bmsTs = ts;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -29,14 +56,19 @@ class DashboardTab extends StatelessWidget {
     final fresh = pos.fixTime != null && DateTime.now().difference(pos.fixTime!).inMinutes < 5;
 
     return RefreshIndicator(
-      onRefresh: state.refresh,
+      onRefresh: () async {
+        await state.refresh();
+        await _loadBms();
+      },
       child: ListView(
         padding: const EdgeInsets.all(12),
         children: [
+          _hero(context, pos, fresh),
+          const SizedBox(height: 12),
           ClipRRect(
             borderRadius: BorderRadius.circular(16),
             child: SizedBox(
-              height: 240,
+              height: 220,
               child: FlutterMap(
                 options: MapOptions(initialCenter: point, initialZoom: 15),
                 children: [
@@ -63,14 +95,6 @@ class DashboardTab extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 10),
-          Row(children: [
-            Icon(Icons.circle, size: 10, color: fresh ? Colors.green : cs.error),
-            const SizedBox(width: 6),
-            Text(fresh ? 'Online' : 'Offline', style: const TextStyle(fontWeight: FontWeight.w600)),
-            const Spacer(),
-            Text('Updated ${timeAgo(pos.fixTime)}', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
-          ]),
           const SizedBox(height: 12),
           GridView.count(
             crossAxisCount: 2,
@@ -117,6 +141,82 @@ class DashboardTab extends StatelessWidget {
               '${pos.valid ? '' : ' · last valid fix'}',
               style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
         ],
+      ),
+    );
+  }
+
+  /// Top hero: battery charge + estimated range + online/parked at a glance.
+  /// SOC comes from the last Bluetooth battery reading when we have one, else
+  /// the tracker's battery percentage.
+  Widget _hero(BuildContext context, TraccarPosition pos, bool fresh) {
+    final cs = Theme.of(context).colorScheme;
+    final bmsSoc = _bms?.soc;
+    final trackerPct = pos.batteryPercent?.round();
+    final soc = bmsSoc ?? trackerPct;
+    final socSource = bmsSoc != null ? 'battery' : (trackerPct != null ? 'tracker' : null);
+
+    final range = RangeEstimator.rangeKm(
+      remainingWh: _bms?.remainingWh,
+      trackerPercent: bmsSoc == null ? pos.batteryPercent : null,
+    );
+
+    Color socColor = soc == null
+        ? cs.onSurfaceVariant
+        : (soc > 50 ? Colors.green : (soc > 20 ? Colors.orange : cs.error));
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(children: [
+          SizedBox(
+            width: 86,
+            height: 86,
+            child: Stack(alignment: Alignment.center, children: [
+              SizedBox(
+                width: 86,
+                height: 86,
+                child: CircularProgressIndicator(
+                  value: soc == null ? null : soc / 100.0,
+                  strokeWidth: 8,
+                  backgroundColor: cs.surfaceContainerHighest,
+                  valueColor: AlwaysStoppedAnimation(socColor),
+                ),
+              ),
+              Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(soc != null ? '$soc' : '—', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                const Text('%', style: TextStyle(fontSize: 11)),
+              ]),
+            ]),
+          ),
+          const SizedBox(width: 18),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (range != null)
+                Text('~${range.round()} km left',
+                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800))
+              else
+                Text(soc != null ? '$soc% charged' : 'No battery data',
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 4),
+              Row(children: [
+                Icon(Icons.circle, size: 9, color: fresh ? Colors.green : cs.error),
+                const SizedBox(width: 5),
+                Text(fresh ? 'Online' : 'Offline', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+                const SizedBox(width: 8),
+                Text('· ${pos.motion ? 'Moving' : 'Parked'}', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+              ]),
+              if (socSource != null) ...[
+                const SizedBox(height: 3),
+                Text(
+                  bmsSoc != null
+                      ? 'charge from battery · ${timeAgo(_bmsTs)}'
+                      : 'charge from tracker',
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11),
+                ),
+              ],
+            ]),
+          ),
+        ]),
       ),
     );
   }

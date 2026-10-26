@@ -59,6 +59,27 @@ class BmsData {
   double? get power => (packVoltage == null || current == null) ? null : packVoltage! * current!;
   bool get hasAnyData => packVoltage != null || cellMillivolts.isNotEmpty || soc != null;
 
+  /// Remaining energy in watt-hours (remaining Ah × pack voltage). Used for the
+  /// range estimate.
+  double? get remainingWh =>
+      (remainingAh == null || packVoltage == null) ? null : remainingAh! * packVoltage!;
+
+  /// Full-pack capacity inferred from the current reading (remainingAh at this
+  /// SOC). Null unless we have both and SOC is meaningful.
+  double? get inferredFullAh => (remainingAh == null || soc == null || soc! < 5)
+      ? null
+      : remainingAh! / (soc! / 100.0);
+
+  /// Chemistry inferred from resting per-cell voltage. LiFePO4 cells sit near
+  /// 3.2–3.4 V; Li-ion (NMC) ranges higher. Rough — labelled "est." in the UI.
+  String? get chemistry {
+    final mv = avgCellMv;
+    if (mv == null) return null;
+    if (mv >= 2500 && mv <= 3450) return 'LFP';
+    if (mv > 3450 && mv <= 4250) return 'Li-ion';
+    return null;
+  }
+
   /// Merge a partial update (each command's reply arrives separately) into a
   /// new snapshot, keeping previously-known fields.
   BmsData merge(BmsData o) => BmsData(

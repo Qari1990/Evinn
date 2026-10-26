@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import '../app_config.dart';
 import '../models/bms.dart';
 import '../services/bms_service.dart';
+import '../services/range_estimator.dart';
+import '../state/app_state.dart';
 import 'widgets.dart';
 
 /// Deep battery view sourced from the Daly BMS over Bluetooth (service FFF0).
@@ -25,10 +28,21 @@ class _BatteryTabState extends State<BatteryTab> {
   void initState() {
     super.initState();
     _bms.status.listen((s) => setState(() => _status = s));
-    _bms.data.listen((d) => setState(() {
-          _data = d;
-          _lastConnected = DateTime.now();
-        }));
+    _bms.data.listen((d) {
+      setState(() {
+        _data = d;
+        _lastConnected = DateTime.now();
+      });
+      // Pair the battery reading with the tracker odometer so the range
+      // estimate can learn this bike's real Wh/km.
+      final odo = context.read<AppState>().currentPosition?.odometerKm;
+      RangeEstimator.record(
+        remainingWh: d.remainingWh,
+        inferredFullAh: d.inferredFullAh,
+        odometerKm: odo,
+        charging: d.state == 'charging',
+      );
+    });
     _bms.errors.listen((e) => setState(() => _error = e));
     _bms.log.listen((l) => setState(() => _log = l));
     _loadCached();
@@ -194,6 +208,18 @@ class _BatteryTabState extends State<BatteryTab> {
             label: 'Load',
             value: d.loadConnected == null ? '—' : (d.loadConnected! ? 'On' : 'Off'),
           ),
+          StatCard(
+            icon: Icons.refresh,
+            label: 'Cycles',
+            value: d.cycles != null ? '${d.cycles}' : '—',
+            sub: d.cycles != null ? 'charge/discharge' : null,
+          ),
+          StatCard(
+            icon: Icons.science_outlined,
+            label: 'Battery type',
+            value: d.chemistry ?? '—',
+            sub: d.chemistry != null ? 'est. from cell V' : null,
+          ),
         ],
       ),
       const SizedBox(height: 16),
@@ -287,6 +313,17 @@ class _BatteryTabState extends State<BatteryTab> {
                   style: TextStyle(color: cs.onSurfaceVariant),
                 ),
               ]),
+              if (RangeEstimator.rangeKm(remainingWh: d.remainingWh) != null) ...[
+                const SizedBox(height: 6),
+                Row(children: [
+                  Icon(Icons.route, size: 15, color: cs.primary),
+                  const SizedBox(width: 4),
+                  Text('~${RangeEstimator.rangeKm(remainingWh: d.remainingWh)!.round()} km left',
+                      style: TextStyle(color: cs.primary, fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 4),
+                  Text('est.', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11)),
+                ]),
+              ],
             ]),
           ),
         ]),

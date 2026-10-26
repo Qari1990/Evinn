@@ -36,6 +36,15 @@ class AppConfig {
   /// How often to poll the Traccar server for live position (seconds).
   static const int livePollSeconds = 12;
 
+  /// Range estimation. We compute remaining range from the battery's remaining
+  /// energy (Ah × pack voltage) divided by a Wh-per-km figure. The app learns
+  /// the real Wh/km from how fast SOC drops versus distance ridden; until it has
+  /// learned, it uses this default. Pack nominal voltage is used to estimate
+  /// range from tracker battery% alone when the BMS isn't connected.
+  static const double defaultWhPerKm = 28.0; // typical ~73V EV bike
+  static const double packNominalV = 73.6; // 23S × 3.2V LiFePO4
+  static const double fullCapacityAh = 30.0; // approx, refined once BMS seen at ~full
+
   /// Known BMS identity, used to find the board in a BLE scan. Most JBD/Daly
   /// boards do NOT advertise their FFF0 service UUID, so filtering the scan by
   /// service finds nothing — we scan everything and match on name / MAC

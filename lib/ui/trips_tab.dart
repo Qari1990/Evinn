@@ -77,16 +77,66 @@ class _TripsTabState extends State<TripsTab> {
                       ? const Center(child: Text('No trips in this period'))
                       : RefreshIndicator(
                           onRefresh: _load,
-                          child: ListView.separated(
+                          child: ListView(
                             padding: const EdgeInsets.all(12),
-                            itemCount: _trips.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 8),
-                            itemBuilder: (_, i) => _tripCard(_trips[i]),
+                            children: [
+                              _summaryCard(),
+                              const SizedBox(height: 12),
+                              for (final t in _trips) ...[
+                                _tripCard(t),
+                                const SizedBox(height: 8),
+                              ],
+                            ],
                           ),
                         ),
         ),
       ],
     );
+  }
+
+  Widget _summaryCard() {
+    final cs = Theme.of(context).colorScheme;
+    num totalDist = 0, totalDur = 0, maxSpeed = 0;
+    for (final t in _trips) {
+      totalDist += (t['distance'] ?? 0) as num;
+      totalDur += (t['duration'] ?? 0) as num;
+      final m = ((t['maxSpeed'] ?? 0) as num) * 1.852;
+      if (m > maxSpeed) maxSpeed = m;
+    }
+    final km = totalDist / 1000.0;
+    final label = _days == 1 ? 'last 24 hours' : 'last $_days days';
+    return Card(
+      color: cs.primaryContainer.withOpacity(.35),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Totals · $label',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant, letterSpacing: .3)),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _metric('${km.toStringAsFixed(1)}', 'km ridden'),
+                _metric('${_trips.length}', _trips.length == 1 ? 'trip' : 'trips'),
+                _metric(_fmtDur(totalDur.toInt()), 'riding'),
+                _metric('${maxSpeed.round()}', 'top km/h'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _metric(String value, String label) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(children: [
+      Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+      const SizedBox(height: 2),
+      Text(label, style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+    ]);
   }
 
   Widget _tripCard(Map<String, dynamic> t) {

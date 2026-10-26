@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'app_config.dart';
+import 'services/range_estimator.dart';
 import 'state/app_state.dart';
 import 'ui/login_screen.dart';
 import 'ui/home_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  RangeEstimator.preload(); // warm the learned Wh/km cache (best-effort)
   runApp(
     ChangeNotifierProvider(
       create: (_) => AppState()..tryRestore(),
