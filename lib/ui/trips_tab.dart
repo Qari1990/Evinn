@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
+import 'trip_detail_screen.dart';
 
 class TripsTab extends StatefulWidget {
   const TripsTab({super.key});
@@ -148,25 +149,33 @@ class _TripsTabState extends State<TripsTab> {
     final max = ((t['maxSpeed'] ?? 0) as num) * 1.852;
     final fmt = DateFormat('EEE d MMM, HH:mm');
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(children: [
-              Icon(Icons.route, size: 18, color: cs.primary),
-              const SizedBox(width: 8),
-              Text(start != null ? fmt.format(start) : 'Trip', style: const TextStyle(fontWeight: FontWeight.w700)),
-              const Spacer(),
-              Text('${distanceKm.toStringAsFixed(1)} km', style: const TextStyle(fontWeight: FontWeight.w700)),
-            ]),
-            const SizedBox(height: 8),
-            Wrap(spacing: 16, children: [
-              _chip(Icons.timer_outlined, _fmtDur(durationMs.toInt())),
-              _chip(Icons.speed, 'avg ${avg.round()} km/h'),
-              _chip(Icons.trending_up, 'max ${max.round()} km/h'),
-            ]),
-          ],
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => TripDetailScreen(trip: t)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.route, size: 18, color: cs.primary),
+                const SizedBox(width: 8),
+                Text(start != null ? fmt.format(start) : 'Trip', style: const TextStyle(fontWeight: FontWeight.w700)),
+                const Spacer(),
+                Text('${distanceKm.toStringAsFixed(1)} km', style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(width: 4),
+                Icon(Icons.chevron_right, size: 18, color: cs.onSurfaceVariant),
+              ]),
+              const SizedBox(height: 8),
+              Wrap(spacing: 16, children: [
+                _chip(Icons.timer_outlined, _fmtDur(durationMs.toInt())),
+                _chip(Icons.speed, 'avg ${avg.round()} km/h'),
+                _chip(Icons.trending_up, 'max ${max.round()} km/h'),
+              ]),
+            ],
+          ),
         ),
       ),
     );

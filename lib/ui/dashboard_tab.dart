@@ -64,6 +64,10 @@ class _DashboardTabState extends State<DashboardTab> {
         padding: const EdgeInsets.all(12),
         children: [
           _hero(context, pos, fresh),
+          if (_rangeModes(pos) != null) ...[
+            const SizedBox(height: 12),
+            RangeModesCard(modes: _rangeModes(pos)!),
+          ],
           const SizedBox(height: 12),
           ClipRRect(
             borderRadius: BorderRadius.circular(16),
@@ -165,7 +169,15 @@ class _DashboardTabState extends State<DashboardTab> {
         : (soc > 50 ? Colors.green : (soc > 20 ? Colors.orange : cs.error));
 
     return Card(
-      child: Padding(
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [socColor.withOpacity(.16), cs.surfaceContainerLow.withOpacity(0)],
+          ),
+        ),
         padding: const EdgeInsets.all(18),
         child: Row(children: [
           SizedBox(
@@ -218,6 +230,14 @@ class _DashboardTabState extends State<DashboardTab> {
           ),
         ]),
       ),
+    );
+  }
+
+  Map<String, double>? _rangeModes(TraccarPosition pos) {
+    final bmsSoc = _bms?.soc;
+    return RangeEstimator.rangeModes(
+      remainingWh: _bms?.remainingWh,
+      trackerPercent: bmsSoc == null ? pos.batteryPercent : null,
     );
   }
 

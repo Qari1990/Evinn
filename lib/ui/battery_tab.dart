@@ -148,9 +148,14 @@ class _BatteryTabState extends State<BatteryTab> {
 
   List<Widget> _battery(BuildContext context, BmsData d, bool live) {
     final cs = Theme.of(context).colorScheme;
+    final modes = RangeEstimator.rangeModes(remainingWh: d.remainingWh);
     return [
       const SizedBox(height: 12),
       _hero(context, d),
+      if (modes != null) ...[
+        const SizedBox(height: 12),
+        RangeModesCard(modes: modes),
+      ],
       if (d.alarms.isNotEmpty) ...[
         const SizedBox(height: 12),
         _alarmBanner(context, d.alarms),

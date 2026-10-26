@@ -99,17 +99,34 @@ class RangeEstimator {
     } catch (_) {}
   }
 
-  /// Estimated km left. Prefers true battery energy from the BMS; otherwise
-  /// estimates from the tracker battery percentage and the pack's nominal size.
+  /// Estimated km left (Normal riding). Prefers true battery energy from the
+  /// BMS; otherwise estimates from the tracker battery percentage and the pack's
+  /// nominal size.
   static double? rangeKm({double? remainingWh, double? trackerPercent}) {
     final whKm = whPerKmSync;
     if (whKm <= 0) return null;
-    double? wh = remainingWh;
-    if (wh == null && trackerPercent != null) {
-      wh = fullAhSync * AppConfig.packNominalV * (trackerPercent / 100.0);
-    }
+    final wh = remainingWh ??
+        (trackerPercent == null
+            ? null
+            : fullAhSync * AppConfig.packNominalV * (trackerPercent / 100.0));
     if (wh == null) return null;
     return wh / whKm;
+  }
+
+  /// Relative energy use of each riding mode vs Normal. Eco draws less per km
+  /// (more range); Sport draws more (less range). Mirrors the 3 modes the Elfa
+  /// app shows.
+  static const Map<String, double> modeFactors = {
+    'Eco': 0.82,
+    'Normal': 1.0,
+    'Sport': 1.25,
+  };
+
+  /// Estimated range for each riding mode, or null if range can't be computed.
+  static Map<String, double>? rangeModes({double? remainingWh, double? trackerPercent}) {
+    final base = rangeKm(remainingWh: remainingWh, trackerPercent: trackerPercent);
+    if (base == null) return null;
+    return {for (final e in modeFactors.entries) e.key: base / e.value};
   }
 
   /// For diagnostics / settings display.
