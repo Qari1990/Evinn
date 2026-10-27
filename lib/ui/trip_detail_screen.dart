@@ -3,7 +3,9 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import '../app_config.dart';
 import '../models/traccar.dart';
+import '../services/range_estimator.dart';
 import '../state/app_state.dart';
 import 'widgets.dart';
 
@@ -20,6 +22,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
   bool _loading = true;
   String? _error;
   List<LatLng> _route = [];
+  List<TraccarPosition> _routePos = [];
 
   @override
   void initState() {
@@ -43,6 +46,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     try {
       final pts = await api.route(deviceId, from, to);
       setState(() {
+        _routePos = pts;
         _route = pts.map((p) => LatLng(p.latitude, p.longitude)).toList();
         _loading = false;
       });
@@ -135,6 +139,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 14),
+                _rideCard(context, distanceKm, avg),
                 if (startAddr.isNotEmpty || endAddr.isNotEmpty) ...[
                   const SizedBox(height: 18),
                   if (startAddr.isNotEmpty) _place(context, Icons.trip_origin, Colors.green, 'From', startAddr),
@@ -149,6 +155,97 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         ],
       ),
     );
+  }
+
+  /// Ride mode (from average speed) + how much battery this trip used vs what
+  /// that mode should use.
+  Widget _rideCard(BuildContext context, double distanceKm, double avgKmh) {
+    final cs = Theme.of(context).colorScheme;
+
+    // Mode by average speed, as WAQAR specified.
+    final String mode;
+    final int modeNo;
+    final Color modeColor;
+    if (avgKmh < 30) {
+      mode = 'Eco';
+      modeNo = 1;
+      modeColor = Colors.green;
+    } else if (avgKmh < 60) {
+      mode = 'Normal';
+      modeNo = 2;
+      modeColor = Colors.blue;
+    } else {
+      mode = 'Sport';
+      modeNo = 3;
+      modeColor = Colors.deepOrange;
+    }
+
+    // Actual battery drop from the tracker's battery% along the route.
+    double? startPct, endPct;
+    for (final p in _routePos) {
+      final b = p.batteryPercent;
+      if (b != null) {
+        startPct ??= b;
+        endPct = b;
+      }
+    }
+    final actualDrop = (startPct != null && endPct != null) ? (startPct - endPct) : null;
+
+    // Expected drop for this mode: distance × (Wh/km × mode factor) ÷ pack Wh.
+    final whKm = RangeEstimator.whPerKmSync * (RangeEstimator.modeFactors[mode] ?? 1.0);
+    final fullWh = RangeEstimator.fullAhSync * AppConfig.packNominalV;
+    final expectedDrop = fullWh > 0 ? (distanceKm * whKm) / fullWh * 100 : null;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(Icons.tune, size: 16, color: cs.onSurfaceVariant),
+            const SizedBox(width: 6),
+            Text('RIDE MODE & BATTERY',
+                style: TextStyle(fontSize: 11, letterSpacing: .4, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant)),
+          ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(color: modeColor.withOpacity(.15), borderRadius: BorderRadius.circular(20)),
+              child: Text('Mode $modeNo · $mode',
+                  style: TextStyle(color: modeColor, fontWeight: FontWeight.w700)),
+            ),
+            const SizedBox(width: 10),
+            Text('avg ${avgKmh.round()} km/h', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+          ]),
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(
+              child: _bStat(context, 'Battery used (actual)',
+                  actualDrop != null ? '${actualDrop.toStringAsFixed(0)}%' : '—',
+                  actualDrop != null && startPct != null && endPct != null
+                      ? '${startPct.round()}% → ${endPct.round()}%'
+                      : 'tracker battery not logged'),
+            ),
+            Expanded(
+              child: _bStat(context, 'Expected for $mode',
+                  expectedDrop != null ? '~${expectedDrop.toStringAsFixed(0)}%' : '—',
+                  'est. for ${distanceKm.toStringAsFixed(1)} km'),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
+
+  Widget _bStat(BuildContext context, String label, String value, String sub) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 4),
+      Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+      Text(sub, style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+    ]);
   }
 
   Widget _place(BuildContext context, IconData icon, Color color, String label, String addr) {

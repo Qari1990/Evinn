@@ -179,14 +179,33 @@ class TraccarApi {
     return (jsonDecode(r.body) as List).map((e) => TraccarPosition.fromJson(e)).toList();
   }
 
+  /// Traccar's report endpoints are strict about the time format. Match exactly
+  /// what the web app sends — millisecond precision + 'Z' — because Dart's
+  /// default toIso8601String() can emit microseconds, which the server rejects
+  /// with a 400.
+  static String _iso(DateTime d) {
+    final u = d.toUtc();
+    String p(int n, [int w = 2]) => n.toString().padLeft(w, '0');
+    return '${u.year}-${p(u.month)}-${p(u.day)}'
+        'T${p(u.hour)}:${p(u.minute)}:${p(u.second)}.${p(u.millisecond, 3)}Z';
+  }
+
+  static String _bodySnippet(http.Response r) {
+    final b = r.body.trim();
+    if (b.isEmpty) return '';
+    return b.length > 160 ? '${b.substring(0, 160)}…' : b;
+  }
+
   /// Trip summaries for a device over a time window.
   Future<List<Map<String, dynamic>>> trips(int deviceId, DateTime from, DateTime to) async {
     final r = await _authedGet('/api/reports/trips', {
       'deviceId': deviceId,
-      'from': from.toUtc().toIso8601String(),
-      'to': to.toUtc().toIso8601String(),
+      'from': _iso(from),
+      'to': _iso(to),
     }, const Duration(seconds: 30));
-    if (r.statusCode != 200) throw Exception('Could not load trips (${r.statusCode})');
+    if (r.statusCode != 200) {
+      throw Exception('Could not load trips (${r.statusCode})${_bodySnippet(r).isEmpty ? '' : ': ${_bodySnippet(r)}'}');
+    }
     return (jsonDecode(r.body) as List).cast<Map<String, dynamic>>();
   }
 
@@ -194,10 +213,12 @@ class TraccarApi {
   Future<List<TraccarPosition>> route(int deviceId, DateTime from, DateTime to) async {
     final r = await _authedGet('/api/reports/route', {
       'deviceId': deviceId,
-      'from': from.toUtc().toIso8601String(),
-      'to': to.toUtc().toIso8601String(),
+      'from': _iso(from),
+      'to': _iso(to),
     }, const Duration(seconds: 30));
-    if (r.statusCode != 200) throw Exception('Could not load route (${r.statusCode})');
+    if (r.statusCode != 200) {
+      throw Exception('Could not load route (${r.statusCode})${_bodySnippet(r).isEmpty ? '' : ': ${_bodySnippet(r)}'}');
+    }
     return (jsonDecode(r.body) as List).map((e) => TraccarPosition.fromJson(e)).toList();
   }
 }
