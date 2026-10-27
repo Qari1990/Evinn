@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../app_config.dart';
 import '../models/bms.dart';
+import 'charge_log.dart';
 import 'daly_protocol.dart';
 
 enum BmsStatus { idle, scanning, connecting, connected, error }
@@ -32,6 +33,7 @@ class BmsService {
   bool _sawData = false;
 
   final _daly = DalyProtocol();
+  final _chargeTracker = ChargeTracker();
   BmsData _snapshot = BmsData();
   BluetoothDevice? _device;
   BluetoothCharacteristic? _write;
@@ -183,6 +185,7 @@ class BmsService {
           _snapshot = _snapshot.merge(parsed);
           _dataCtrl.add(_snapshot);
           _cache(_snapshot);
+          _chargeTracker.record(_snapshot);
           if (!_sawData) {
             _sawData = true;
             _d('Receiving live data ✓');
@@ -225,6 +228,7 @@ class BmsService {
   }
 
   Future<void> disconnect() async {
+    _chargeTracker.flush();
     _pollTimer?.cancel();
     await _notifySub?.cancel();
     await _scanSub?.cancel();

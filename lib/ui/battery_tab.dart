@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../app_config.dart';
 import '../models/bms.dart';
 import '../services/bms_service.dart';
+import '../services/charge_log.dart';
 import '../services/range_estimator.dart';
 import '../state/app_state.dart';
 import 'widgets.dart';
@@ -23,6 +25,7 @@ class _BatteryTabState extends State<BatteryTab> {
   String? _error;
   String _log = '';
   DateTime? _lastConnected; // timestamp of the cached reading
+  List<ChargeSession> _charges = [];
 
   @override
   void initState() {
@@ -46,6 +49,16 @@ class _BatteryTabState extends State<BatteryTab> {
     _bms.errors.listen((e) => setState(() => _error = e));
     _bms.log.listen((l) => setState(() => _log = l));
     _loadCached();
+    _loadCharges();
+    // When a connection ends the tracker may have logged a new session; refresh.
+    _bms.status.listen((s) {
+      if (s == BmsStatus.idle || s == BmsStatus.error) _loadCharges();
+    });
+  }
+
+  Future<void> _loadCharges() async {
+    final c = await ChargeLog.load();
+    if (mounted) setState(() => _charges = c);
   }
 
   Future<void> _loadCached() async {
@@ -83,6 +96,7 @@ class _BatteryTabState extends State<BatteryTab> {
           ),
         if (d != null && d.hasAnyData) ..._battery(context, d, connected),
         if (d == null && !busy) _emptyState(context),
+        ..._chargingHistory(context),
         if (_log.isNotEmpty) _logTile(context),
       ],
     );
@@ -212,12 +226,6 @@ class _BatteryTabState extends State<BatteryTab> {
             icon: Icons.electrical_services,
             label: 'Load',
             value: d.loadConnected == null ? '—' : (d.loadConnected! ? 'On' : 'Off'),
-          ),
-          StatCard(
-            icon: Icons.refresh,
-            label: 'Cycles',
-            value: d.cycles != null ? '${d.cycles}' : '—',
-            sub: d.cycles != null ? 'charge/discharge' : null,
           ),
           StatCard(
             icon: Icons.science_outlined,
@@ -382,6 +390,89 @@ class _BatteryTabState extends State<BatteryTab> {
             style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
       ]),
     );
+  }
+
+  // ---- charging history --------------------------------------------------
+
+  List<Widget> _chargingHistory(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return [
+      const SizedBox(height: 20),
+      Row(children: [
+        Icon(Icons.bolt, size: 18, color: cs.primary),
+        const SizedBox(width: 6),
+        const Text('Charging history', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+      ]),
+      const SizedBox(height: 4),
+      Text('Recorded while the app is connected to the battery during a charge.',
+          style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+      const SizedBox(height: 10),
+      if (_charges.isEmpty)
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text('No charge sessions yet. Connect the app to the battery\nwhile charging and it will log each session here.',
+              textAlign: TextAlign.center, style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+        )
+      else
+        for (final c in _charges) ...[
+          _chargeCard(context, c),
+          const SizedBox(height: 8),
+        ],
+    ];
+  }
+
+  Widget _chargeCard(BuildContext context, ChargeSession c) {
+    final cs = Theme.of(context).colorScheme;
+    final fmt = DateFormat('EEE d MMM, HH:mm');
+    final gained = (c.socFrom != null && c.socTo != null) ? (c.socTo! - c.socFrom!) : null;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(Icons.battery_charging_full, size: 18, color: Colors.green),
+            const SizedBox(width: 8),
+            Text(fmt.format(c.start.toLocal()), style: const TextStyle(fontWeight: FontWeight.w700)),
+            const Spacer(),
+            if (c.socFrom != null && c.socTo != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(color: Colors.green.withOpacity(.15), borderRadius: BorderRadius.circular(20)),
+                child: Text('${c.socFrom}% → ${c.socTo}%',
+                    style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w700, fontSize: 13)),
+              ),
+          ]),
+          const SizedBox(height: 10),
+          Wrap(spacing: 16, runSpacing: 6, children: [
+            _chargeChip(Icons.timer_outlined, _fmtDur(c.duration)),
+            if (gained != null) _chargeChip(Icons.trending_up, '+$gained%'),
+            _chargeChip(Icons.power, 'avg ${c.avgPowerW.toStringAsFixed(0)} W'),
+            _chargeChip(Icons.electrical_services, '${c.units.toStringAsFixed(2)} units'),
+          ]),
+        ]),
+      ),
+    );
+  }
+
+  Widget _chargeChip(IconData i, String s) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(i, size: 14, color: cs.onSurfaceVariant),
+      const SizedBox(width: 4),
+      Text(s, style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+    ]);
+  }
+
+  String _fmtDur(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    return h > 0 ? '${h}h ${m}m' : '${m}m';
   }
 
   Widget _emptyState(BuildContext context) {

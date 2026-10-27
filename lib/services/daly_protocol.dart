@@ -99,13 +99,15 @@ class DalyProtocol {
           minTempC: (d[2] - 40).toDouble(),
         );
       case 0x93:
-        // d[0] state, d[1] charge MOS, d[2] discharge MOS, d[3] BMS life
-        // (charge/discharge cycles), d[4..7] residual capacity in mAh.
+        // d[0] state, d[1] charge MOS, d[2] discharge MOS, d[4..7] residual
+        // capacity in mAh. NOTE: d[3] is NOT the cycle count on this board
+        // (it returned jumping garbage — 248 then 40 — while the Daly app shows
+        // a steady value), so we don't read cycles here. Real cycle count needs
+        // a private Daly command we haven't captured yet.
         return BmsData(
           state: d[0] == 1 ? 'charging' : (d[0] == 2 ? 'discharging' : 'idle'),
           chargeMos: d[1] != 0,
           dischargeMos: d[2] != 0,
-          cycles: d[3] > 0 ? d[3] : null,
           remainingAh: u32(4) / 1000.0,
         );
       case 0x94:

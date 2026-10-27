@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../services/trip_builder.dart';
 import '../state/app_state.dart';
 import 'trip_detail_screen.dart';
 
@@ -31,8 +32,12 @@ class _TripsTabState extends State<TripsTab> {
     try {
       final to = DateTime.now();
       final from = to.subtract(Duration(days: _days));
-      final trips = await api.trips(deviceId, from, to);
-      trips.sort((a, b) => (b['startTime'] ?? '').toString().compareTo((a['startTime'] ?? '').toString()));
+      // We build trips ourselves from the raw position history instead of the
+      // server's /api/reports/trips — that report crashes (400) on the Elfa
+      // server because its reverse-geocoder host is unreachable. route() returns
+      // raw points with no geocoding, so it's safe.
+      final pts = await api.route(deviceId, from, to);
+      final trips = TripBuilder.build(pts);
       setState(() => _trips = trips);
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));

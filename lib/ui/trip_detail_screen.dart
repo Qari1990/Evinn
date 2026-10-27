@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
@@ -23,6 +25,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
   String? _error;
   List<LatLng> _route = [];
   List<TraccarPosition> _routePos = [];
+  String? _startAddr;
+  String? _endAddr;
 
   @override
   void initState() {
@@ -50,11 +54,63 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         _route = pts.map((p) => LatLng(p.latitude, p.longitude)).toList();
         _loading = false;
       });
+      _loadAddresses();
     } catch (e) {
       setState(() {
         _loading = false;
         _error = e.toString().replaceFirst('Exception: ', '');
       });
+    }
+  }
+
+  /// Reverse-geocode the start and end points to readable addresses. We do this
+  /// client-side (OpenStreetMap Nominatim) because the Elfa server's own
+  /// geocoder is down — that's why the server trips report fails. Failures here
+  /// are silent: the trip still shows, just without place names.
+  Future<void> _loadAddresses() async {
+    final t = widget.trip;
+    final s = _latLng(t['startLat'], t['startLon']) ??
+        (_route.isNotEmpty ? _route.first : null);
+    final e = _latLng(t['endLat'], t['endLon']) ??
+        (_route.isNotEmpty ? _route.last : null);
+    final sa = s == null ? null : await _reverse(s);
+    final ea = e == null ? null : await _reverse(e);
+    if (!mounted) return;
+    setState(() {
+      _startAddr = sa;
+      _endAddr = ea;
+    });
+  }
+
+  Future<String?> _reverse(LatLng p) async {
+    try {
+      final uri = Uri.parse(
+          'https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18'
+          '&lat=${p.latitude}&lon=${p.longitude}');
+      final r = await http.get(uri, headers: {
+        'User-Agent': 'EVINN/1.0 (evinn-app)',
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 12));
+      if (r.statusCode != 200) return null;
+      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      final a = (j['address'] as Map?)?.cast<String, dynamic>() ?? {};
+      // Build a short, human address from the most useful parts.
+      final parts = <String>[];
+      for (final k in ['road', 'neighbourhood', 'suburb', 'village', 'town', 'city']) {
+        final v = a[k];
+        if (v is String && v.isNotEmpty && !parts.contains(v)) parts.add(v);
+        if (parts.length >= 2) break;
+      }
+      if (parts.isEmpty) {
+        final dn = j['display_name'];
+        if (dn is String && dn.isNotEmpty) {
+          return dn.split(',').take(2).map((e) => e.trim()).join(', ');
+        }
+        return null;
+      }
+      return parts.join(', ');
+    } catch (_) {
+      return null;
     }
   }
 
@@ -68,8 +124,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     final durationMs = (t['duration'] ?? 0) as num;
     final avg = ((t['averageSpeed'] ?? 0) as num) * 1.852;
     final max = ((t['maxSpeed'] ?? 0) as num) * 1.852;
-    final startAddr = (t['startAddress'] ?? '').toString();
-    final endAddr = (t['endAddress'] ?? '').toString();
+    final startAddr = _startAddr ?? (t['startAddress'] ?? '').toString();
+    final endAddr = _endAddr ?? (t['endAddress'] ?? '').toString();
 
     final startPt = _latLng(t['startLat'], t['startLon']);
     final endPt = _latLng(t['endLat'], t['endLon']);
