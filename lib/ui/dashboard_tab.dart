@@ -53,7 +53,12 @@ class _DashboardTabState extends State<DashboardTab> {
     }
 
     final point = LatLng(pos.latitude, pos.longitude);
-    final fresh = pos.fixTime != null && DateTime.now().difference(pos.fixTime!).inMinutes < 5;
+    final device = state.selectedDevice;
+    // Status like the Elfa app: the tracker's own online/offline flag, backed up
+    // by whether it reported very recently.
+    final online = device?.status == 'online' ||
+        (pos.fixTime != null && DateTime.now().difference(pos.fixTime!).inMinutes < 5);
+    final lastUpdate = device?.lastUpdate ?? pos.fixTime;
 
     return RefreshIndicator(
       onRefresh: () async {
@@ -63,7 +68,7 @@ class _DashboardTabState extends State<DashboardTab> {
       child: ListView(
         padding: const EdgeInsets.all(12),
         children: [
-          _hero(context, pos, fresh),
+          _hero(context, pos, online, lastUpdate),
           if (_rangeModes(pos) != null) ...[
             const SizedBox(height: 12),
             RangeModesCard(modes: _rangeModes(pos)!),
@@ -144,15 +149,92 @@ class _DashboardTabState extends State<DashboardTab> {
           Text('${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}'
               '${pos.valid ? '' : ' · last valid fix'}',
               style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+          const SizedBox(height: 10),
+          _allDetails(context, pos),
         ],
       ),
     );
   }
 
+  Widget _pill(BuildContext context, IconData icon, String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(color: color.withOpacity(.14), borderRadius: BorderRadius.circular(20)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 4),
+        Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+      ]),
+    );
+  }
+
+  /// Every field the tracker reports, for people who want to see everything.
+  Widget _allDetails(BuildContext context, TraccarPosition pos) {
+    final cs = Theme.of(context).colorScheme;
+    final rows = <MapEntry<String, String>>[
+      MapEntry('Course', '${pos.course.round()}°'),
+      MapEntry('Altitude', '${pos.altitude.round()} m'),
+      MapEntry('GPS fix', pos.valid ? 'valid' : 'invalid'),
+      if (pos.fixTime != null) MapEntry('Fix time', _fmtTime(pos.fixTime!)),
+    ];
+    pos.attributes.forEach((k, v) {
+      rows.add(MapEntry(_pretty(k), _fmtVal(v)));
+    });
+
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: EdgeInsets.zero,
+        leading: const Icon(Icons.info_outline, size: 18),
+        title: const Text('All details', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        children: [
+          Container(
+            decoration: BoxDecoration(color: cs.surfaceContainerHighest, borderRadius: BorderRadius.circular(10)),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Column(
+              children: [
+                for (final r in rows)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(flex: 4, child: Text(r.key, style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant))),
+                        Expanded(flex: 5, child: Text(r.value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), textAlign: TextAlign.right)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _pretty(String key) {
+    // insert spaces before capitals and capitalise first letter: "totalDistance" -> "Total distance"
+    final spaced = key.replaceAllMapped(RegExp(r'([A-Z])'), (m) => ' ${m[1]!.toLowerCase()}');
+    final s = spaced.trim();
+    return s.isEmpty ? key : '${s[0].toUpperCase()}${s.substring(1)}';
+  }
+
+  String _fmtVal(dynamic v) {
+    if (v is bool) return v ? 'Yes' : 'No';
+    if (v is double) return v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
+    return '$v';
+  }
+
+  String _fmtTime(DateTime t) {
+    final two = (int n) => n.toString().padLeft(2, '0');
+    return '${two(t.hour)}:${two(t.minute)} ${two(t.day)}/${two(t.month)}';
+  }
+
   /// Top hero: battery charge + estimated range + online/parked at a glance.
   /// SOC comes from the last Bluetooth battery reading when we have one, else
   /// the tracker's battery percentage.
-  Widget _hero(BuildContext context, TraccarPosition pos, bool fresh) {
+  Widget _hero(BuildContext context, TraccarPosition pos, bool online, DateTime? lastUpdate) {
     final cs = Theme.of(context).colorScheme;
     final bmsSoc = _bms?.soc;
     final trackerPct = pos.batteryPercent?.round();
@@ -209,23 +291,21 @@ class _DashboardTabState extends State<DashboardTab> {
               else
                 Text(soc != null ? '$soc% charged' : 'No battery data',
                     style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 4),
-              Row(children: [
-                Icon(Icons.circle, size: 9, color: fresh ? Colors.green : cs.error),
-                const SizedBox(width: 5),
-                Text(fresh ? 'Online' : 'Offline', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
-                const SizedBox(width: 8),
-                Text('· ${pos.motion ? 'Moving' : 'Parked'}', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                _pill(context, online ? Icons.wifi : Icons.wifi_off, online ? 'Online' : 'Offline',
+                    online ? Colors.green : cs.error),
+                _pill(context, pos.motion ? Icons.directions_bike : Icons.local_parking,
+                    pos.motion ? 'Moving' : 'Parked', pos.motion ? Colors.blue : cs.onSurfaceVariant),
+                _pill(context, pos.ignition ? Icons.vpn_key : Icons.vpn_key_off,
+                    pos.ignition ? 'ACC on' : 'ACC off', pos.ignition ? Colors.green : cs.onSurfaceVariant),
               ]),
-              if (socSource != null) ...[
-                const SizedBox(height: 3),
-                Text(
-                  bmsSoc != null
-                      ? 'charge from battery · ${timeAgo(_bmsTs)}'
-                      : 'charge from tracker',
-                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11),
-                ),
-              ],
+              const SizedBox(height: 6),
+              Text(
+                '${socSource == 'battery' ? 'charge from battery · ${timeAgo(_bmsTs)}' : socSource == 'tracker' ? 'charge from tracker' : ''}'
+                '${lastUpdate != null ? '${socSource != null ? '  ·  ' : ''}updated ${timeAgo(lastUpdate)}' : ''}',
+                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11),
+              ),
             ]),
           ),
         ]),

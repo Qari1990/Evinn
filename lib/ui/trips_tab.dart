@@ -16,18 +16,14 @@ class _TripsTabState extends State<TripsTab> {
   String? _error;
   List<Map<String, dynamic>> _trips = [];
   int _days = 7;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
-  }
+  int? _loadedDeviceId; // which device we've loaded trips for
 
   Future<void> _load() async {
     final state = context.read<AppState>();
     final api = state.api;
     final deviceId = state.selectedDeviceId;
     if (api == null || deviceId == null) return;
+    _loadedDeviceId = deviceId;
     setState(() {
       _loading = true;
       _error = null;
@@ -48,6 +44,16 @@ class _TripsTabState extends State<TripsTab> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // Load (or reload) once the bike is known — devices may not be ready when
+    // this tab is first built, so we can't rely on a one-shot initState load.
+    final state = context.watch<AppState>();
+    final deviceId = state.selectedDeviceId;
+    if (deviceId != null && deviceId != _loadedDeviceId && !_loading) {
+      _loadedDeviceId = deviceId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load();
+      });
+    }
     return Column(
       children: [
         Padding(

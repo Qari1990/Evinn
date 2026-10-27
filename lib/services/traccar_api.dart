@@ -151,42 +151,52 @@ class TraccarApi {
     throw Exception('Login failed — none of the request formats worked.\n\n$debugLog');
   }
 
+  /// GET that transparently re-logs-in and retries once if the session has
+  /// expired (Traccar drops the cookie after a while, which was making live
+  /// data freeze and reports come back empty until the app was restarted).
+  Future<http.Response> _authedGet(String path, [Map<String, dynamic>? q, Duration timeout = const Duration(seconds: 20)]) async {
+    var r = await http.get(_u(path, q), headers: _headers).timeout(timeout);
+    if (r.statusCode == 401 || r.statusCode == 403 || r.statusCode == 404) {
+      try {
+        await login(); // refresh the session cookie
+        r = await http.get(_u(path, q), headers: _headers).timeout(timeout);
+      } catch (_) {
+        // keep the original response if re-login itself failed
+      }
+    }
+    return r;
+  }
+
   Future<List<TraccarDevice>> devices() async {
-    final r = await http.get(_u('/api/devices'), headers: _headers).timeout(const Duration(seconds: 20));
+    final r = await _authedGet('/api/devices');
     if (r.statusCode != 200) throw Exception('Could not load bikes (${r.statusCode})');
     return (jsonDecode(r.body) as List).map((e) => TraccarDevice.fromJson(e)).toList();
   }
 
   Future<List<TraccarPosition>> positions() async {
-    final r = await http.get(_u('/api/positions'), headers: _headers).timeout(const Duration(seconds: 20));
+    final r = await _authedGet('/api/positions');
     if (r.statusCode != 200) throw Exception('Could not load live data (${r.statusCode})');
     return (jsonDecode(r.body) as List).map((e) => TraccarPosition.fromJson(e)).toList();
   }
 
   /// Trip summaries for a device over a time window.
   Future<List<Map<String, dynamic>>> trips(int deviceId, DateTime from, DateTime to) async {
-    final r = await http.get(
-      _u('/api/reports/trips', {
-        'deviceId': deviceId,
-        'from': from.toUtc().toIso8601String(),
-        'to': to.toUtc().toIso8601String(),
-      }),
-      headers: _headers,
-    ).timeout(const Duration(seconds: 30));
+    final r = await _authedGet('/api/reports/trips', {
+      'deviceId': deviceId,
+      'from': from.toUtc().toIso8601String(),
+      'to': to.toUtc().toIso8601String(),
+    }, const Duration(seconds: 30));
     if (r.statusCode != 200) throw Exception('Could not load trips (${r.statusCode})');
     return (jsonDecode(r.body) as List).cast<Map<String, dynamic>>();
   }
 
   /// Raw route points for replaying a trip on the map.
   Future<List<TraccarPosition>> route(int deviceId, DateTime from, DateTime to) async {
-    final r = await http.get(
-      _u('/api/reports/route', {
-        'deviceId': deviceId,
-        'from': from.toUtc().toIso8601String(),
-        'to': to.toUtc().toIso8601String(),
-      }),
-      headers: _headers,
-    ).timeout(const Duration(seconds: 30));
+    final r = await _authedGet('/api/reports/route', {
+      'deviceId': deviceId,
+      'from': from.toUtc().toIso8601String(),
+      'to': to.toUtc().toIso8601String(),
+    }, const Duration(seconds: 30));
     if (r.statusCode != 200) throw Exception('Could not load route (${r.statusCode})');
     return (jsonDecode(r.body) as List).map((e) => TraccarPosition.fromJson(e)).toList();
   }
