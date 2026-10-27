@@ -17,7 +17,9 @@ class TripBuilder {
   static const int minTripSec = 60;
 
   static List<Map<String, dynamic>> build(List<TraccarPosition> positions) {
-    final pts = positions.where((p) => p.fixTime != null).toList()
+    final pts = positions
+        .where((p) => p.fixTime != null && (p.latitude != 0 || p.longitude != 0))
+        .toList()
       ..sort((a, b) => a.fixTime!.compareTo(b.fixTime!));
 
     final trips = <Map<String, dynamic>>[];
@@ -57,13 +59,41 @@ class TripBuilder {
     final durSec = end.difference(start).inSeconds;
     if (durSec < minTripSec) return null;
 
-    double distM = 0;
-    double maxKnots = 0;
-    for (var i = 0; i < pts.length; i++) {
-      if (pts[i].speedKnots > maxKnots) maxKnots = pts[i].speedKnots;
-      if (i > 0) {
-        distM += _haversine(pts[i - 1].latitude, pts[i - 1].longitude, pts[i].latitude, pts[i].longitude);
+    // Distance: trust the tracker's own figures, which is what the Elfa/Traccar
+    // app shows and is far more accurate than summing raw GPS points (that
+    // inflates distance from GPS scatter). Preference order:
+    //   1. odometer delta (totalDistance end − start)
+    //   2. sum of the per-fix `distance` attribute the tracker reports
+    //   3. haversine over the points (last resort)
+    final firstOdo = pts.first.totalDistanceM;
+    final lastOdo = pts.last.totalDistanceM;
+    double? distM;
+    if (firstOdo != null && lastOdo != null && lastOdo >= firstOdo) {
+      final d = lastOdo - firstOdo;
+      if (d > 0) distM = d;
+    }
+    if (distM == null) {
+      double sum = 0;
+      var sawAttr = false;
+      for (final p in pts) {
+        final dm = p.distanceM;
+        if (dm != null && dm >= 0) {
+          sum += dm;
+          sawAttr = true;
+        }
       }
+      if (sawAttr && sum > 0) distM = sum;
+    }
+    double maxKnots = 0;
+    for (final p in pts) {
+      if (p.speedKnots > maxKnots) maxKnots = p.speedKnots;
+    }
+    if (distM == null) {
+      double h = 0;
+      for (var i = 1; i < pts.length; i++) {
+        h += _haversine(pts[i - 1].latitude, pts[i - 1].longitude, pts[i].latitude, pts[i].longitude);
+      }
+      distM = h;
     }
     if (distM < minTripKm * 1000) return null;
 

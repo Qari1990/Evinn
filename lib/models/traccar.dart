@@ -75,6 +75,12 @@ class TraccarPosition {
     return v == null ? null : v / 1000.0;
   }
 
+  /// Total odometer in metres (the tracker's own running distance).
+  double? get totalDistanceM => _dn(attributes['totalDistance']);
+
+  /// Distance travelled since the previous fix, in metres (tracker-computed).
+  double? get distanceM => _dn(attributes['distance']);
+
   /// Engine-on time in milliseconds.
   double? get engineHoursMs => _dn(attributes['hours']);
 }

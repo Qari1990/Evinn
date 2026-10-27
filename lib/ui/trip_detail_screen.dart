@@ -48,18 +48,63 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       return;
     }
     try {
-      final pts = await api.route(deviceId, from, to);
+      final all = await api.route(deviceId, from, to);
+      // Drop zero/garbage fixes so the line doesn't jump to the ocean.
+      final pts = all.where((p) => p.latitude != 0 || p.longitude != 0).toList();
       setState(() {
         _routePos = pts;
         _route = pts.map((p) => LatLng(p.latitude, p.longitude)).toList();
         _loading = false;
       });
       _loadAddresses();
+      _snapToRoads(pts); // refine the drawn line onto real roads
     } catch (e) {
       setState(() {
         _loading = false;
         _error = e.toString().replaceFirst('Exception: ', '');
       });
+    }
+  }
+
+  /// Snap the raw GPS trace onto the road network (OpenStreetMap OSRM
+  /// map-matching) so the drawn line follows real roads instead of the
+  /// scattered raw fixes. Purely cosmetic for the map — distance/speed come from
+  /// the tracker's own figures. Any failure leaves the raw line in place.
+  Future<void> _snapToRoads(List<TraccarPosition> pts) async {
+    if (pts.length < 3) return;
+    try {
+      // OSRM's public server caps the request size, so downsample to ~95 points.
+      const maxPts = 95;
+      final step = (pts.length / maxPts).ceil();
+      final sample = <TraccarPosition>[];
+      for (var i = 0; i < pts.length; i += step) {
+        sample.add(pts[i]);
+      }
+      if (sample.last != pts.last) sample.add(pts.last);
+      final coords = sample.map((p) => '${p.longitude},${p.latitude}').join(';');
+      final uri = Uri.parse(
+          'https://router.project-osrm.org/match/v1/driving/$coords'
+          '?geometries=geojson&overview=full&tidy=true');
+      final r = await http.get(uri, headers: {
+        'User-Agent': 'EVINN/1.0 (evinn-app)',
+      }).timeout(const Duration(seconds: 15));
+      if (r.statusCode != 200) return;
+      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      final matchings = j['matchings'] as List?;
+      if (matchings == null || matchings.isEmpty) return;
+      final line = <LatLng>[];
+      for (final m in matchings) {
+        final geom = (m as Map)['geometry'] as Map?;
+        final coordsList = geom?['coordinates'] as List?;
+        if (coordsList == null) continue;
+        for (final c in coordsList) {
+          final pair = c as List; // [lon, lat]
+          line.add(LatLng((pair[1] as num).toDouble(), (pair[0] as num).toDouble()));
+        }
+      }
+      if (line.length >= 2 && mounted) setState(() => _route = line);
+    } catch (_) {
+      // keep the raw line
     }
   }
 
