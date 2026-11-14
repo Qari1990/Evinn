@@ -162,10 +162,18 @@ class _BatteryTabState extends State<BatteryTab> {
 
   List<Widget> _battery(BuildContext context, BmsData d, bool live) {
     final cs = Theme.of(context).colorScheme;
-    final modes = RangeEstimator.rangeModes(remainingWh: d.remainingWh);
+    final coulombSoc = RangeEstimator.socFromAh(d.remainingAh);
+    final modes = RangeEstimator.rangeModes(
+      remainingWh: d.remainingWh,
+      socPct: (coulombSoc ?? d.soc?.toDouble()),
+    );
     return [
       const SizedBox(height: 12),
       _hero(context, d),
+      if (coulombSoc != null && d.soc != null && (coulombSoc.round() - d.soc!).abs() >= 3) ...[
+        const SizedBox(height: 8),
+        _socNote(context, coulombSoc.round(), d.soc!),
+      ],
       if (modes != null) ...[
         const SizedBox(height: 12),
         RangeModesCard(modes: modes),
@@ -274,7 +282,8 @@ class _BatteryTabState extends State<BatteryTab> {
 
   Widget _hero(BuildContext context, BmsData d) {
     final cs = Theme.of(context).colorScheme;
-    final soc = d.soc;
+    // Coulomb SOC (from residual Ah) is steadier than the reported voltage SOC.
+    final soc = RangeEstimator.socFromAh(d.remainingAh)?.round() ?? d.soc;
     Color socColor = soc == null
         ? cs.onSurfaceVariant
         : (soc > 50 ? Colors.green : (soc > 20 ? Colors.orange : cs.error));
@@ -326,12 +335,12 @@ class _BatteryTabState extends State<BatteryTab> {
                   style: TextStyle(color: cs.onSurfaceVariant),
                 ),
               ]),
-              if (RangeEstimator.rangeKm(remainingWh: d.remainingWh) != null) ...[
+              if (RangeEstimator.rangeKm(remainingWh: d.remainingWh, socPct: soc?.toDouble()) != null) ...[
                 const SizedBox(height: 6),
                 Row(children: [
                   Icon(Icons.route, size: 15, color: cs.primary),
                   const SizedBox(width: 4),
-                  Text('~${RangeEstimator.rangeKm(remainingWh: d.remainingWh)!.round()} km left',
+                  Text('~${RangeEstimator.rangeKm(remainingWh: d.remainingWh, socPct: soc?.toDouble())!.round()} km left',
                       style: TextStyle(color: cs.primary, fontWeight: FontWeight.w700)),
                   const SizedBox(width: 4),
                   Text('est.', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11)),
@@ -341,6 +350,28 @@ class _BatteryTabState extends State<BatteryTab> {
           ),
         ]),
       ),
+    );
+  }
+
+  Widget _socNote(BuildContext context, int coulomb, int reported) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: cs.secondaryContainer.withOpacity(.35),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.info_outline, size: 15, color: cs.onSurfaceVariant),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Showing $coulomb% from capacity (Ah). The BMS voltage reading says $reported% — '
+            'that one drifts up at rest and down under load, so capacity is steadier.',
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+          ),
+        ),
+      ]),
     );
   }
 

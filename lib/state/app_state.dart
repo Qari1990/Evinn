@@ -20,6 +20,8 @@ class AppState extends ChangeNotifier {
   bool loading = false;
   String? error;
   Timer? _poll;
+  int _errCount = 0;
+  bool _reloggingIn = false;
 
   bool get loggedIn => _api != null;
 
@@ -96,10 +98,36 @@ class AppState extends ChangeNotifier {
         positions[p.deviceId] = p;
       }
       error = null;
+      _errCount = 0;
     } catch (e) {
       error = e.toString().replaceFirst('Exception: ', '');
+      _errCount++;
+      // A per-call retry already runs inside the API on 401/403/404. If data
+      // still isn't coming after a couple of polls, the session is likely dead
+      // (cookie fully expired) — do one clean re-login with the stored
+      // credentials to recover without the user having to restart the app.
+      if (_errCount >= 2) await _reloginFromStored();
     }
     notifyListeners();
+  }
+
+  Future<void> _reloginFromStored() async {
+    final api = _api;
+    if (api == null || _reloggingIn) return;
+    _reloggingIn = true;
+    try {
+      await api.login(); // refreshes the session cookie using stored creds
+      final pos = await api.positions();
+      for (final p in pos) {
+        positions[p.deviceId] = p;
+      }
+      error = null;
+      _errCount = 0;
+    } catch (_) {
+      // keep the existing error (e.g. wrong password after a change)
+    } finally {
+      _reloggingIn = false;
+    }
   }
 
   void selectDevice(int id) {

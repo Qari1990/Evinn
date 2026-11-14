@@ -45,10 +45,39 @@ class _DashboardTabState extends State<DashboardTab> {
     if (pos == null) {
       return RefreshIndicator(
         onRefresh: state.refresh,
-        child: ListView(children: [
-          const SizedBox(height: 120),
-          Center(child: Text(state.error ?? 'Waiting for the bike to report…')),
-        ]),
+        child: ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            const SizedBox(height: 100),
+            Icon(state.error != null ? Icons.cloud_off : Icons.gps_not_fixed,
+                size: 48, color: cs.onSurfaceVariant),
+            const SizedBox(height: 14),
+            Center(
+              child: Text(
+                state.error ?? 'Waiting for the bike to report…',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: state.error != null ? cs.error : cs.onSurfaceVariant),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Center(
+              child: Text(
+                'If this persists, log out and log in again — '
+                'your Traccar password may have changed.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Center(
+              child: FilledButton.tonalIcon(
+                onPressed: () => state.refresh(),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ),
+          ],
+        ),
       );
     }
 
@@ -236,14 +265,18 @@ class _DashboardTabState extends State<DashboardTab> {
   /// the tracker's battery percentage.
   Widget _hero(BuildContext context, TraccarPosition pos, bool online, DateTime? lastUpdate) {
     final cs = Theme.of(context).colorScheme;
-    final bmsSoc = _bms?.soc;
+    // Prefer coulomb-based SOC (residual Ah) from the battery — it doesn't bounce
+    // up overnight the way the voltage % does.
+    final coulombSoc = RangeEstimator.socFromAh(_bms?.remainingAh)?.round();
+    final bmsSoc = coulombSoc ?? _bms?.soc;
     final trackerPct = pos.batteryPercent?.round();
     final soc = bmsSoc ?? trackerPct;
     final socSource = bmsSoc != null ? 'battery' : (trackerPct != null ? 'tracker' : null);
 
     final range = RangeEstimator.rangeKm(
       remainingWh: _bms?.remainingWh,
-      trackerPercent: bmsSoc == null ? pos.batteryPercent : null,
+      trackerPercent: _bms?.remainingWh == null ? pos.batteryPercent : null,
+      socPct: soc?.toDouble(),
     );
 
     Color socColor = soc == null
@@ -314,10 +347,12 @@ class _DashboardTabState extends State<DashboardTab> {
   }
 
   Map<String, double>? _rangeModes(TraccarPosition pos) {
-    final bmsSoc = _bms?.soc;
+    final coulombSoc = RangeEstimator.socFromAh(_bms?.remainingAh)?.round();
+    final soc = coulombSoc ?? _bms?.soc ?? pos.batteryPercent?.round();
     return RangeEstimator.rangeModes(
       remainingWh: _bms?.remainingWh,
-      trackerPercent: bmsSoc == null ? pos.batteryPercent : null,
+      trackerPercent: _bms?.remainingWh == null ? pos.batteryPercent : null,
+      socPct: soc?.toDouble(),
     );
   }
 
